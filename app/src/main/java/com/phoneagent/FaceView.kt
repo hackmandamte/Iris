@@ -11,8 +11,9 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Face in the island: two eyes with a clear gap in the centre so the front camera
- * sits between them when the pill is aligned over the notch / punch-hole.
+ * Face in the island: two eyes with a camera-sized gap in the centre so the
+ * front camera / punch-hole sits between them when the pill is aligned over the notch.
+ * Mood drift, mouth and expression logic are unchanged — only spacing + blink visibility.
  */
 class FaceView(ctx: Context) : View(ctx) {
     @Volatile var mood = Mood.IDLE
@@ -22,7 +23,8 @@ class FaceView(ctx: Context) : View(ctx) {
     private fun dp(v: Float) = v * d
 
     override fun onMeasure(wSpec: Int, hSpec: Int) {
-        setMeasuredDimension(dp(112f).toInt(), dp(36f).toInt())
+        // Compact footprint that matches a collapsed Dynamic Island (~126×37)
+        setMeasuredDimension(dp(96f).toInt(), dp(36f).toInt())
     }
 
     override fun onDraw(c: Canvas) {
@@ -40,6 +42,7 @@ class FaceView(ctx: Context) : View(ctx) {
         var gx = 0f
         var gy = 0f
         var open = 1f
+        // Mood motion formulas kept identical to previous versions
         when (mood) {
             Mood.IDLE -> {
                 gx = (sin(t / 1300.0) * dp(2.5f) + sin(t / 430.0) * dp(0.8f)).toFloat()
@@ -55,15 +58,21 @@ class FaceView(ctx: Context) : View(ctx) {
             Mood.REPORT -> {}
             Mood.ERROR -> { gx = (sin(t / 70.0) * dp(0.8f)).toFloat() }
         }
+        // Blink: full close for ~220 ms every ~3.8 s so it is obvious on the small island
         if (mood == Mood.IDLE || mood == Mood.THINKING || mood == Mood.ACTING || mood == Mood.SPEAKING) {
-            val ph = t % 4300
-            if (ph < 160) open *= (abs(ph - 80) / 80f).coerceIn(0.02f, 1f)
+            val ph = t % 3800
+            if (ph < 220) {
+                // triangle that bottoms out near 0 for ~80 ms in the middle
+                val mid = abs(ph - 110f) / 110f
+                open *= mid.coerceIn(0.01f, 1f)
+            }
         }
 
+        // Eye centres: gap sized so a typical punch-hole / camera (~10–16 dp) fills the space between the eyes
         val ey = h * 0.42f + gy
-        val half = dp(28f)
-        val rx = dp(5.2f)
-        val ry = dp(6.5f) * open
+        val half = dp(18f)   // centre-to-centre ≈ 36 dp → clear gap ≈ 14–16 dp after eye width
+        val rx = dp(5.8f)
+        val ry = dp(7.2f) * open
         for (s in intArrayOf(-1, 1)) {
             val cx = w / 2f + s * half + gx
             when (mood) {
@@ -119,6 +128,6 @@ class FaceView(ctx: Context) : View(ctx) {
             }
             p.style = Paint.Style.FILL
         }
-        postInvalidateDelayed(40)
+        postInvalidateDelayed(32)
     }
 }
