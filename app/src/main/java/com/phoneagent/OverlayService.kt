@@ -28,7 +28,8 @@ import android.widget.Toast
 
 /**
  * Foreground service. Keeps the agent alive and draws the "face island":
- * a black pill at the top of the screen, over the front camera, with a face that reacts to what the agent does.
+ * a black pill at the top of the screen, sized like the iPhone Dynamic Island,
+ * with a face that reacts to what the agent does.
  * Tap = open task box (with Stop all while tasks run). Long-press = summarize my screen. Drag = reposition over your camera.
  */
 class OverlayService : Service() {
@@ -124,7 +125,7 @@ class OverlayService : Service() {
         }
     }
 
-    // ---- the island ----
+    // ---- the island (Dynamic Island proportions) ----
     private fun showIsland() {
         if (island != null) return
         if (!Settings.canDrawOverlays(this)) {
@@ -136,20 +137,25 @@ class OverlayService : Service() {
             val f = FaceView(this)
             val tv = TextView(this).apply {
                 setTextColor(Color.WHITE)
-                textSize = 13f
-                maxWidth = dp(230)
-                maxLines = 4
+                textSize = 12f
+                maxWidth = dp(200)
+                maxLines = 3
                 ellipsize = TextUtils.TruncateAt.END
-                setPadding(0, dp(6), dp(16), dp(6))
+                setPadding(dp(10), dp(2), dp(14), dp(2))
                 visibility = View.GONE
             }
             val box = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = GradientDrawable().apply { setColor(Color.BLACK); cornerRadius = dp(20).toFloat() }
+                // Pill radius ≈ half of 37 dp height → Dynamic Island look
+                background = GradientDrawable().apply { setColor(Color.BLACK); cornerRadius = dp(18).toFloat() }
             }
             box.addView(f)
             box.addView(tv)
+            // Collapsed Dynamic Island footprint (~126×37 pt)
+            box.minimumWidth = dp(126)
+            box.minimumHeight = dp(37)
+            box.setPadding(dp(8), 0, dp(8), 0)
 
             val lp = WindowManager.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -161,7 +167,7 @@ class OverlayService : Service() {
             ).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 x = prefs.getInt("island_x", 0)
-                y = prefs.getInt("island_y", dp(2))
+                y = prefs.getInt("island_y", dp(6))
                 if (Build.VERSION.SDK_INT >= 28) {
                     layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
                 }
@@ -210,7 +216,6 @@ class OverlayService : Service() {
             face = f
             islandText = tv
         } catch (e: Exception) {
-            // Overlay permission revoked, OEM restriction, etc. – degrade gracefully
             getSharedPreferences("agent", MODE_PRIVATE).edit().putBoolean("bubble", false).apply()
             island = null
             face = null
