@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Iris</string>
+    <string name="a11y_desc">Lets Iris read the screen and perform taps, typing and scrolling when you turn on Screen control inside the app.</string>
+</resources>
