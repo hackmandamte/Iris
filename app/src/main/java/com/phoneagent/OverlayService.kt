@@ -30,7 +30,8 @@ import android.widget.Toast
  * Foreground service. Keeps the agent alive and draws the "face island":
  * a black pill at the top of the screen, sized like the iPhone Dynamic Island,
  * with a face that reacts to what the agent does.
- * Tap = open task box (with Stop all while tasks run). Long-press = summarize my screen. Drag = reposition over your camera.
+ * Tap = open task box. Long-press = summarize screen. Drag = reposition.
+ * While speaking, the island shows only the current word.
  */
 class OverlayService : Service() {
     private lateinit var wm: WindowManager
@@ -41,6 +42,20 @@ class OverlayService : Service() {
     private var panel: LinearLayout? = null
     private var panelLog: TextView? = null
     private var tail = ""
+    private var speakWords: List<String> = emptyList()
+    private var speakIndex = 0
+    private val wordTick = object : Runnable {
+        override fun run() {
+            val tv = islandText ?: return
+            if (speakIndex >= speakWords.size) return
+            tv.text = speakWords[speakIndex]
+            tv.visibility = View.VISIBLE
+            val w = speakWords[speakIndex]
+            speakIndex++
+            val delay = (180 + w.length * 38).coerceIn(220, 520).toLong()
+            ui.postDelayed(this, delay)
+        }
+    }
 
     private val collapse = object : Runnable {
         override fun run() {
@@ -108,20 +123,40 @@ class OverlayService : Service() {
     private fun applyExpr(e: Expr) {
         val f = face ?: return
         ui.removeCallbacks(collapse)
+        ui.removeCallbacks(wordTick)
+        speakWords = emptyList()
+        speakIndex = 0
+        Voice.onWord = null
         f.mood = e.mood
         val tv = islandText
-        if (e.text.isNotEmpty()) {
+        f.invalidate()
+
+        if (e.mood == Mood.SPEAKING && e.text.isNotEmpty()) {
+            // Show only the current word while speaking
+            val words = e.text.take(220).split(Regex("\\s+")).filter { it.isNotEmpty() }
+            speakWords = words
+            speakIndex = 0
+            tv?.visibility = View.VISIBLE
+            Voice.onWord = { word ->
+                ui.post {
+                    islandText?.text = word
+                    islandText?.visibility = View.VISIBLE
+                }
+            }
+            // Timed fallback when onRangeStart is unavailable
+            ui.post(wordTick)
+            ui.postDelayed(collapse, maxOf(3500L, e.text.length * 55L).coerceAtMost(14000L))
+        } else if (e.text.isNotEmpty()) {
             tv?.text = e.text.take(220)
             tv?.visibility = View.VISIBLE
+            when (e.mood) {
+                Mood.REPORT, Mood.ERROR ->
+                    ui.postDelayed(collapse, maxOf(3500L, e.text.length * 55L).coerceAtMost(12000L))
+                else -> ui.postDelayed(collapse, 45000L)
+            }
         } else {
             tv?.visibility = View.GONE
-        }
-        f.invalidate()
-        when (e.mood) {
-            Mood.IDLE -> {}
-            Mood.REPORT, Mood.SPEAKING, Mood.ERROR ->
-                ui.postDelayed(collapse, maxOf(3500L, e.text.length * 55L).coerceAtMost(12000L))
-            else -> ui.postDelayed(collapse, 45000L) // fail-safe
+            if (e.mood != Mood.IDLE) ui.postDelayed(collapse, 45000L)
         }
     }
 
@@ -139,7 +174,7 @@ class OverlayService : Service() {
                 setTextColor(Color.WHITE)
                 textSize = 12f
                 maxWidth = dp(200)
-                maxLines = 3
+                maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 setPadding(dp(10), dp(2), dp(14), dp(2))
                 visibility = View.GONE
@@ -147,12 +182,10 @@ class OverlayService : Service() {
             val box = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                // Pill radius ≈ half of 37 dp height → Dynamic Island look
                 background = GradientDrawable().apply { setColor(Color.BLACK); cornerRadius = dp(18).toFloat() }
             }
             box.addView(f)
             box.addView(tv)
-            // Collapsed Dynamic Island footprint (~126×37 pt)
             box.minimumWidth = dp(126)
             box.minimumHeight = dp(37)
             box.setPadding(dp(8), 0, dp(8), 0)
@@ -227,7 +260,6 @@ class OverlayService : Service() {
         if (panel == null) showPanel() else hidePanel()
     }
 
-    // ---- task box, drops down under the island ----
     private fun showPanel() {
         if (panel != null) return
         val box = LinearLayout(this).apply {
@@ -294,6 +326,8 @@ class OverlayService : Service() {
     private fun removeViews() {
         hidePanel()
         ui.removeCallbacks(collapse)
+        ui.removeCallbacks(wordTick)
+        Voice.onWord = null
         island?.let { try { wm.removeView(it) } catch (e: Exception) { } }
         island = null
         face = null
