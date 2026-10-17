@@ -25,6 +25,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : Activity() {
     companion object {
@@ -150,7 +152,11 @@ class MainActivity : Activity() {
             items.add("Remove"); acts.add { AgentEngine.tasks.remove(t); refreshTasks() }
         }
         if (t.remote == null && Pc.primary(this) != null) {
-            items.add("Hand off to PC"); acts.add { /* handoff */ }
+            items.add("Hand off to PC"); acts.add {
+                val d = Pc.primary(this) ?: return@add
+                AgentEngine.handoffToPc(t, d)
+                Toast.makeText(this, "Handing off to ${d.name}…", Toast.LENGTH_SHORT).show()
+            }
         }
         AlertDialog.Builder(this)
             .setTitle("#${t.id}  ${t.title}")
@@ -342,10 +348,10 @@ class MainActivity : Activity() {
         // social / quick / alive / PC row
         val queueChip = chip("Post queue")
         styleChip(queueChip, false)
-        queueChip.setOnClickListener { /* post queue */ }
+        queueChip.setOnClickListener { showPostQueue() }
         val digestChip = chip("Daily summary")
-        styleChip(digestChip, false)
-        digestChip.setOnClickListener { /* digest */ }
+        styleChip(digestChip, prefs().getBoolean("digest_on", false))
+        digestChip.setOnClickListener { showDigestMenu(digestChip) }
         val quickChip = chip("Quick access")
         styleChip(quickChip, p.getBoolean("quick_on", true))
         quickChip.setOnClickListener {
@@ -438,7 +444,8 @@ class MainActivity : Activity() {
             if (tid != null) {
                 AgentEngine.reply(tid, t)
             } else {
-                AgentEngine.send(t)
+                val pc = if (runOnPc) Pc.primary(this) else null
+                if (pc != null) AgentEngine.sendToPc(pc, t) else AgentEngine.send(t)
             }
             refreshTasks()
         }
@@ -474,11 +481,187 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun pcMenu() { /* simplified */ }
+    private fun pcMenu() {
+        val devices = Pc.devices(this)
+        val items = ArrayList<CharSequence>()
+        val acts = ArrayList<() -> Unit>()
+        if (devices.isEmpty()) {
+            items.add("Paste pairing link…")
+            acts.add { pastePairLink() }
+        } else {
+            val primary = Pc.primary(this)
+            items.add(if (runOnPc) "Run new tasks on this phone" else "Run new tasks on ${primary?.name ?: "PC"}")
+            acts.add {
+                runOnPc = !runOnPc
+                prefs().edit().putBoolean("run_on_pc", runOnPc).apply()
+                refreshPcChip()
+            }
+            items.add("Paste another pairing link…")
+            acts.add { pastePairLink() }
+            for (d in devices) {
+                items.add("Unpair ${d.name}")
+                acts.add {
+                    Pc.remove(this, d.id)
+                    if (devices.size == 1) {
+                        runOnPc = false
+                        prefs().edit().putBoolean("run_on_pc", false).apply()
+                    }
+                    refreshPcChip()
+                    Toast.makeText(this, "Unpaired ${d.name}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Pair PC")
+            .setItems(items.toTypedArray()) { _, i -> acts[i]() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
 
-    private fun showNextApproval() { /* simplified */ }
+    private fun pastePairLink() {
+        val field = EditText(this).apply {
+            hint = "iris://pair?h=…&p=…&t=…"
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Paste pairing link")
+            .setMessage("On the PC, start pairing and copy the iris:// link (or scan the QR).")
+            .setView(field)
+            .setPositiveButton("Pair") { _, _ ->
+                val link = field.text.toString().trim()
+                if (link.isBlank()) return@setPositiveButton
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).setPackage(packageName))
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
 
-    private fun checkInbox() { /* simplified */ }
+    private fun showPostQueue() {
+        val arr = Posts.all(this)
+        if (arr.length() == 0) {
+            AlertDialog.Builder(this)
+                .setTitle("Post queue")
+                .setMessage("No scheduled posts.\n\nAsk Iris to schedule one after you approve the exact text, platform and time.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+        val labels = ArrayList<CharSequence>()
+        val ids = ArrayList<String>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val id = o.optString("id")
+            val at = o.optLong("at", o.optLong("when", 0L))
+            val st = o.optString("status")
+            val plat = Posts.name(o.optString("platform"))
+            val preview = o.optString("text").take(40).replace("\n", " ")
+            labels.add("[$st] $plat · ${Posts.formatWhen(at)}\n$preview")
+            ids.add(id)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Post queue (${arr.length()})")
+            .setItems(labels.toTypedArray()) { _, which ->
+                val id = ids[which]
+                AlertDialog.Builder(this)
+                    .setTitle("Post $id")
+                    .setMessage(labels[which])
+                    .setPositiveButton("Cancel post") { _, _ ->
+                        if (Posts.cancel(this, id)) {
+                            Toast.makeText(this, "Cancelled $id", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    .setNegativeButton("Close", null)
+                    .show()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showDigestMenu(chip: TextView) {
+        val on = prefs().getBoolean("digest_on", false)
+        val hour = prefs().getInt("digest_hour", 8)
+        val items = arrayOf(
+            if (on) "Turn off daily summary" else "Turn on daily summary",
+            "Run summary now",
+            "Set time (currently ${\"%02d\".format(hour)}:00)"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Daily summary")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        if (on) {
+                            Posts.clearDigest(this)
+                            styleChip(chip, false)
+                            Toast.makeText(this, "Daily summary off", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Posts.scheduleDigest(this, hour.coerceIn(0, 23))
+                            styleChip(chip, true)
+                            Toast.makeText(this, "Daily summary at ${\"%02d\".format(hour)}:00", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    1 -> {
+                        AgentEngine.runDigest()
+                        Toast.makeText(this, "Running daily summary…", Toast.LENGTH_SHORT).show()
+                        refreshTasks()
+                    }
+                    2 -> {
+                        val hours = (0..23).map { \"%02d:00\".format(it) }.toTypedArray()
+                        AlertDialog.Builder(this)
+                            .setTitle("Digest hour")
+                            .setItems(hours) { _, h ->
+                                Posts.scheduleDigest(this, h)
+                                styleChip(chip, true)
+                                Toast.makeText(this, "Daily summary at ${\"%02d\".format(h)}:00", Toast.LENGTH_SHORT).show()
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showNextApproval() {
+        val next = AgentEngine.approvals.firstOrNull { it.id !in shownApprovals } ?: return
+        shownApprovals.add(next.id)
+        AlertDialog.Builder(this)
+            .setTitle("PC asks: ${next.kind}")
+            .setMessage(next.text.take(800))
+            .setPositiveButton("Allow") { _, _ -> AgentEngine.answerApproval(next, true) }
+            .setNegativeButton("Deny") { _, _ -> AgentEngine.answerApproval(next, false) }
+            .setOnDismissListener { showNextApproval() }
+            .show()
+    }
+
+    private fun checkInbox() {
+        if (inboxOpen) return
+        val items = Pc.inbox(this)
+        if (items.isEmpty()) return
+        val first = items.first()
+        inboxOpen = true
+        val title = first.optString("title", "From PC")
+        val body = first.optString("text", first.optString("body", ""))
+        val id = first.optString("id")
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(body.take(1000))
+            .setPositiveButton("Open") { _, _ ->
+                Pc.removeInbox(this, id)
+                inboxOpen = false
+                val prompt = first.optString("prompt", body)
+                if (prompt.isNotBlank()) AgentEngine.send(prompt)
+                refreshTasks()
+            }
+            .setNegativeButton("Dismiss") { _, _ ->
+                Pc.removeInbox(this, id)
+                inboxOpen = false
+                checkInbox()
+            }
+            .setOnCancelListener { inboxOpen = false }
+            .show()
+    }
 
     // Voice result goes into the text field so you can check it before sending.
     @Suppress("DEPRECATION")
