@@ -110,8 +110,12 @@ object NotifLog {
             if (app.isNotBlank() && !o.getString("app").contains(app, true)) continue
             val canReply = NotifListener.live[o.getString("ref")]?.notification?.actions
                 ?.any { a -> a.remoteInputs?.isNotEmpty() == true } == true
-            out.add("[${o.getString(\"app\")}] ${o.getString(\"title\")}: ${o.getString(\"text\")} " +
-                "(${fmt.format(Date(o.getLong(\"t\")))}) ref=${o.getString(\"ref\")}" + (if (canReply) " [can reply]" else ""))
+            val appName = o.getString("app")
+            val title = o.getString("title")
+            val body = o.getString("text")
+            val ref = o.getString("ref")
+            val whenStr = fmt.format(Date(o.getLong("t")))
+            out.add("[$appName] $title: $body ($whenStr) ref=$ref" + (if (canReply) " [can reply]" else ""))
         }
         return if (out.isEmpty()) "(no notifications in that period)" else out.takeLast(150).joinToString("\n")
     }
