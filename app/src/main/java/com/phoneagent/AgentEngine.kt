@@ -32,18 +32,16 @@ class Task(
     val summarize: Boolean = false
 ) {
     val history = JSONArray()
-    var remote: PcDevice? = null      // set when this task runs on a paired PC
+    var remote: PcDevice? = null
     @Volatile var remoteId = 0
-    var display: String? = null       // shown instead of the long prompt (handoffs)
+    var display: String? = null
     @Volatile var cancelled = false
-    /** queued, working, needs screen, done, stopped, error */
     @Volatile var state = "queued"
     val active: Boolean get() = state == "queued" || state == "working" || state == "needs screen" || state == "needs approval"
 }
 
 /**
- * The phone has one screen, so tasks take turns using it. A task holds the screen from its first
- * screen action until it finishes; everything else (thinking, notifications, web, scheduling) runs in parallel.
+ * The phone has one screen, so tasks take turns using it.
  */
 object ScreenLease {
     private var owner = -1
@@ -63,7 +61,6 @@ object ScreenLease {
     @Synchronized fun holder(): Int = owner
     @Synchronized fun release(t: Task) { if (owner == t.id) owner = -1; waiting.remove(t) }
 
-    /** Blocks until this task owns the screen. Returns false if cancelled or timed out (timeoutMs 0 = no limit). */
     fun acquire(t: Task, timeoutMs: Long): Boolean {
         val end = if (timeoutMs > 0) System.currentTimeMillis() + timeoutMs else Long.MAX_VALUE
         while (true) {
@@ -82,21 +79,23 @@ class App : Application() {
     }
 }
 
+data class PcApproval(val id: String, val title: String, val detail: String)
+
 object AgentEngine {
     const val MAX_STEPS = 1_000_000_000_000L
-    private const val MAX_PARALLEL = 5      // tasks working at once; more wait in the queue
-    private const val MAX_MODEL_CALLS = 3   // simultaneous model requests (free-tier friendly)
+    private const val MAX_PARALLEL = 5
+    private const val MAX_MODEL_CALLS = 3
 
     private val UI_TOOLS = setOf("screen_read", "tap_text", "tap_xy", "type_text", "scroll", "press",
         "open_app", "open_url", "dial", "compose_sms")
 
     lateinit var app: Context
     val tasks = CopyOnWriteArrayList<Task>()
-    val approvals = CopyOnWriteArrayList<PcApproval>()   // PC is waiting for the user's OK
+    val approvals = CopyOnWriteArrayList<PcApproval>()
     val entries = ArrayList<Pair<Int, String>>()
     val logListeners = CopyOnWriteArraySet<(Int, String) -> Unit>()
-    val stateListeners = CopyOnWriteArraySet<(Boolean) -> Unit>()   // any task running?
-    val taskListeners = CopyOnWriteArraySet<() -> Unit>()           // task list or states changed
+    val stateListeners = CopyOnWriteArraySet<(Boolean) -> Unit>()
+    val taskListeners = CopyOnWriteArraySet<() -> Unit>()
     val exprListeners = CopyOnWriteArraySet<(Expr) -> Unit>()
 
     private val slots = Semaphore(MAX_PARALLEL, true)
@@ -140,7 +139,11 @@ object AgentEngine {
     fun reply(id: Int, text: String) {
         val t = task(id) ?: return
         emit(id, "You: $text")
-        launch(t, text, false)
+        // continue same task history
+        t.history.put(JSONObject()
+            .put("role", "user")
+            .put("parts", JSONArray().put(JSONObject().put("text", text))))
+        launchContinue(t)
     }
 
     fun stop(id: Int) {
@@ -203,7 +206,6 @@ object AgentEngine {
                     t.state = "needs screen"
                     notifyState()
                     wakeAndUnlock()
-                    // give user a moment if locked
                     var waited = 0
                     while (isLocked() && waited < 15000 && !t.cancelled) {
                         Thread.sleep(500)
@@ -223,11 +225,41 @@ object AgentEngine {
                     return@thread
                 }
 
-                // seed history
                 t.history.put(JSONObject()
                     .put("role", "user")
                     .put("parts", JSONArray().put(JSONObject().put("text", text))))
 
+                runLoop(t, key)
+            } catch (e: Exception) {
+                if (!t.cancelled) {
+                    emit(t.id, "⚠ ${e.message ?: "error"}")
+                    t.state = "error"
+                    express(t, Expr(Mood.ERROR, e.message ?: "error"))
+                }
+            } finally {
+                ScreenLease.release(t)
+                slots.release()
+                if (t.state == "working" || t.state == "needs screen") t.state = "done"
+                notifyState()
+            }
+        }
+    }
+
+    private fun launchContinue(t: Task) {
+        startFgs()
+        thread(name = "iris-task-${t.id}-cont") {
+            try {
+                slots.acquire()
+                if (t.cancelled) return@thread
+                t.state = "working"
+                notifyState()
+                val key = prefs().getString("api_key", "") ?: ""
+                if (key.isBlank()) {
+                    emit(t.id, "⚠ No API key")
+                    t.state = "error"
+                    notifyState()
+                    return@thread
+                }
                 runLoop(t, key)
             } catch (e: Exception) {
                 if (!t.cancelled) {
@@ -269,6 +301,7 @@ When you have the final answer or the task is done, reply with plain text (no mo
 When screen control tools are available: call screen_read to see the screen, act (tap_text, tap_xy, type_text, scroll, press), then screen_read again to verify. Tap a text field before typing into it.
 Be concise in tool args. Prefer tap_text over coordinates when the label is visible.
 Do not invent tool results. If a tool fails, adapt or ask the user.
+Social: draft captions/replies in plain text; only schedule or send after the user approves the exact wording.
 """.trim()
 
     private fun runLoop(t: Task, key: String) {
@@ -293,7 +326,6 @@ Do not invent tool results. If a tool fails, adapt or ask the user.
             val content = candidates.getJSONObject(0).optJSONObject("content") ?: JSONObject()
             val parts = content.optJSONArray("parts") ?: JSONArray()
 
-            // collect function calls
             val calls = ArrayList<JSONObject>()
             var textOut = ""
             for (i in 0 until parts.length()) {
@@ -302,21 +334,18 @@ Do not invent tool results. If a tool fails, adapt or ask the user.
                 if (pt.has("text")) textOut += pt.optString("text")
             }
 
-            // append model turn to history
             t.history.put(JSONObject().put("role", "model").put("parts", parts))
 
             if (calls.isEmpty()) {
-                // final answer
                 val reply = textOut.ifBlank { "(done)" }
                 emit(t.id, "🤖 $reply")
                 express(t, Expr(Mood.REPORT, reply.take(80)))
                 if (p.getBoolean("speak", false) && !t.quiet) Voice.say(app, reply)
                 t.state = "done"
-                t.postId?.let { Posts.markDone(app, it) }
+                t.postId?.let { Posts.setStatus(app, it, "done") }
                 return
             }
 
-            // execute tools
             val results = JSONArray()
             for (fc in calls) {
                 if (t.cancelled) break
@@ -348,7 +377,6 @@ Do not invent tool results. If a tool fails, adapt or ask the user.
                     .put("name", name)
                     .put("response", JSONObject().put("result", out.take(8000)))))
             }
-            // append tool results as user turn (Gemini function-calling convention)
             t.history.put(JSONObject().put("role", "user").put("parts", results))
         }
         if (!t.cancelled) {
@@ -368,7 +396,6 @@ Do not invent tool results. If a tool fails, adapt or ask the user.
     }
 
     private fun trimHistory(history: JSONArray) {
-        // keep system-ish early context + recent turns; drop middle if too long
         while (history.length() > 40) {
             var cut = 0
             for (i in 1 until history.length()) {
@@ -379,7 +406,7 @@ Do not invent tool results. If a tool fails, adapt or ask the user.
             if (cut > 0) {
                 for (k in 0 until cut) history.remove(0)
             } else if (history.length() > 80) {
-                history.remove(1); history.remove(1) // drop oldest call/response pair
+                history.remove(1); history.remove(1)
             } else break
         }
     }
@@ -426,5 +453,3 @@ Do not invent tool results. If a tool fails, adapt or ask the user.
         }
     }
 }
-
-data class PcApproval(val id: String, val title: String, val detail: String)
