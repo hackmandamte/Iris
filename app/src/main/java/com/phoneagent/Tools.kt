@@ -3,100 +3,275 @@ package com.phoneagent
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.net.Uri
+import android.os.BatteryManager
 import android.provider.AlarmClock
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 object Tools {
-    private const val NOSVC = "ERROR: screen control not connected. Enable Iris in Accessibility."
+    private const val S = "STRING"
+    private const val N = "NUMBER"
+    private const val B = "BOOLEAN"
+    private const val NOSVC = "ERROR: screen control not connected. Ask the user to enable Iris in Settings > Accessibility."
 
-    fun run(ctx: Context, name: String, args: JSONObject, screen: Boolean = false): String {
-        return when (name) {
-            "notify" -> {
-                val title = args.optString("title", "Iris")
-                val text = args.optString("text", "")
-                val nm = ctx.getSystemService(NotificationManager::class.java)
-                nm.createNotificationChannel(NotificationChannel("agent_msgs", "Agent messages", NotificationManager.IMPORTANCE_DEFAULT))
-                nm.notify(
-                    (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
-                    Notification.Builder(ctx, "agent_msgs")
-                        .setSmallIcon(R.drawable.ic_stat_face)
-                        .setContentTitle(title)
-                        .setContentText(text)
-                        .setStyle(Notification.BigTextStyle().bigText(text))
-                        .build()
-                )
-                "ok"
+    private class T(
+        val name: String, val desc: String,
+        val params: Map<String, String> = emptyMap(),
+        val optional: Set<String> = emptySet(),
+        val screen: Boolean = false
+    )
+
+    private val all = listOf(
+        T("open_app", "Launch an installed app by name or package.", mapOf("name" to S)),
+        T("open_url", "Open a URL in the browser.", mapOf("url" to S)),
+        T("web_fetch", "Fetch a web page as plain text.", mapOf("url" to S)),
+        T("notify", "Show a notification.", mapOf("title" to S, "text" to S)),
+        T("speak", "Speak text aloud.", mapOf("text" to S)),
+        T("battery", "Battery level and charging state."),
+        T("clipboard_get", "Read the clipboard (Android may block this in background)."),
+        T("clipboard_set", "Copy text to the clipboard.", mapOf("text" to S)),
+        T("torch", "Flashlight on or off.", mapOf("on" to B)),
+        T("set_alarm", "Set an alarm (24h time).", mapOf("hour" to N, "minute" to N, "label" to S), setOf("label")),
+        T("set_timer", "Start a countdown timer.", mapOf("seconds" to N, "label" to S), setOf("label")),
+        T("compose_sms", "Open the SMS composer with a draft. It is not sent until send is tapped.", mapOf("number" to S, "text" to S)),
+        T("dial", "Open the dialer with a number (does not call).", mapOf("number" to S)),
+        T("read_file", "Read a text file from the agent's private storage.", mapOf("path" to S)),
+        T("write_file", "Write a text file in the agent's private storage.", mapOf("path" to S, "content" to S)),
+        T("list_files", "List files in a directory under the agent's private storage.", mapOf("path" to S), setOf("path")),
+        T("list_uploads", "List images and documents the user uploaded or screenshots saved in the library."),
+        T("analyze_upload", "Analyse an uploaded image or text document by id (from list_uploads). For images, describe content and answer the question. For text files, extract or summarise.", mapOf("id" to S, "question" to S), setOf("question")),
+        T("delete_upload", "Remove an upload by id.", mapOf("id" to S)),
+        T("screenshot", "Capture the current screen into the upload library (needs Accessibility on API 30+). Returns the new upload id.", screen = true),
+        T("list_notifications", "Recent notifications. app and hours are optional filters.", mapOf("app" to S, "hours" to N), setOf("app", "hours")),
+        T("reply_notification", "Send an inline reply to a notification by its ref. Only after the user approved the exact reply text.", mapOf("ref" to S, "text" to S)),
+        T("screen_read", "List visible UI elements with text, flags and tap coordinates.", screen = true),
+        T("tap_text", "Tap the element containing this text.", mapOf("text" to S), screen = true),
+        T("tap_xy", "Tap screen coordinates.", mapOf("x" to N, "y" to N), screen = true),
+        T("type_text", "Type into the focused text field (tap it first).", mapOf("text" to S, "append" to B), setOf("append"), screen = true),
+        T("scroll", "Scroll: 'down' reveals content below, 'up' above, 'left'/'right' sideways.", mapOf("direction" to S), screen = true),
+        T("press", "Press a system key: back, home, recents, notifications, quick_settings.", mapOf("key" to S), screen = true)
+    )
+
+    private val settle = setOf("open_app", "open_url", "tap_text", "tap_xy", "type_text", "scroll",
+        "press", "dial", "compose_sms", "set_alarm", "set_timer")
+
+    fun declarations(screenOn: Boolean): JSONArray {
+        val arr = JSONArray()
+        for (t in all) {
+            if (t.screen && !screenOn) continue
+            val props = JSONObject()
+            val required = JSONArray()
+            for ((k, v) in t.params) {
+                props.put(k, JSONObject().put("type", when (v) {
+                    N -> "number"
+                    B -> "boolean"
+                    else -> "string"
+                }))
+                if (k !in t.optional) required.put(k)
             }
-            "open_url" -> {
-                val url = args.optString("url")
-                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                "opened $url"
-            }
-            "set_alarm" -> {
-                val i = Intent(AlarmClock.ACTION_SET_ALARM)
-                    .putExtra(AlarmClock.EXTRA_HOUR, args.optInt("hour"))
-                    .putExtra(AlarmClock.EXTRA_MINUTES, args.optInt("minute"))
-                    .putExtra(AlarmClock.EXTRA_MESSAGE, args.optString("message", "Iris"))
-                    .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                ctx.startActivity(i)
-                "alarm set"
-            }
-            "list_uploads" -> {
-                val a = Media.list(ctx)
-                if (a.length() == 0) "(no uploads yet — ask the user to attach a file or take a screenshot)"
-                else (0 until a.length()).joinToString("\n") { i ->
-                    val o = a.getJSONObject(i)
-                    "${o.optString("id")}  ${o.optString("kind")}  ${o.optString("name")}  (${o.optString("added")}, ${o.optLong("bytes")} bytes)"
-                }
-            }
-            "analyze_upload" -> analyzeUpload(
-                ctx,
-                args.getString("id"),
-                args.optString("question", "Describe this and extract any useful information.")
-            )
-            "delete_upload" -> if (Media.delete(ctx, args.getString("id"))) "deleted" else "ERROR: unknown id"
-            "screenshot" -> {
-                val svc = AgentAccessibilityService.instance ?: return NOSVC
-                val id = svc.captureToLibrary(ctx)
-                if (id.startsWith("ERROR")) id else "saved screenshot as upload id=$id"
-            }
-            "speak" -> {
-                val text = args.optString("text")
-                Voice.say(ctx, text)
-                "speaking"
-            }
-            else -> "ERROR: unknown tool $name"
+            arr.put(JSONObject()
+                .put("name", t.name)
+                .put("description", t.desc)
+                .put("parameters", JSONObject()
+                    .put("type", "object")
+                    .put("properties", props)
+                    .put("required", required)))
         }
+        return arr
     }
 
-    /** Schema list for the model (subset focused on media + basics). */
-    fun definitions(): JSONArray {
-        fun t(name: String, desc: String, props: JSONObject = JSONObject(), required: JSONArray = JSONArray()) =
-            JSONObject()
-                .put("name", name)
-                .put("description", desc)
-                .put("parameters", JSONObject().put("type", "object").put("properties", props).put("required", required))
-        return JSONArray()
-            .put(t("list_uploads", "List images and documents the user uploaded or screenshots."))
-            .put(t("analyze_upload", "Analyse an uploaded image or text file by id.",
-                JSONObject().put("id", JSONObject().put("type", "string")).put("question", JSONObject().put("type", "string")),
-                JSONArray().put("id")))
-            .put(t("delete_upload", "Remove an upload by id.",
-                JSONObject().put("id", JSONObject().put("type", "string")), JSONArray().put("id")))
-            .put(t("screenshot", "Capture the screen into the upload library (needs Accessibility, Android 11+)."))
-            .put(t("notify", "Show a notification.",
-                JSONObject().put("title", JSONObject().put("type", "string")).put("text", JSONObject().put("type", "string"))))
-            .put(t("open_url", "Open a URL.",
-                JSONObject().put("url", JSONObject().put("type", "string")), JSONArray().put("url")))
-            .put(t("speak", "Speak text aloud.",
-                JSONObject().put("text", JSONObject().put("type", "string")), JSONArray().put("text")))
+    fun run(ctx: Context, name: String, args: JSONObject, screen: Boolean = false): String {
+        return try {
+            when (name) {
+                "open_app" -> {
+                    val n = args.getString("name")
+                    val svc = AgentAccessibilityService.instance
+                    if (svc != null) svc.openApp(n) else {
+                        val pm = ctx.packageManager
+                        val intent = pm.getLaunchIntentForPackage(n)
+                            ?: pm.getInstalledApplications(0).firstOrNull {
+                                pm.getApplicationLabel(it).toString().equals(n, true)
+                            }?.let { pm.getLaunchIntentForPackage(it.packageName) }
+                        if (intent != null) {
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            ctx.startActivity(intent)
+                            "opened"
+                        } else "ERROR: app not found"
+                    }
+                }
+                "open_url" -> {
+                    val url = args.getString("url")
+                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    "opened $url"
+                }
+                "web_fetch" -> {
+                    val url = args.getString("url")
+                    val c = URL(url).openConnection() as HttpURLConnection
+                    c.connectTimeout = 15000; c.readTimeout = 20000
+                    c.setRequestProperty("User-Agent", "IrisAgent/1.0")
+                    val code = c.responseCode
+                    val body = (if (code in 200..299) c.inputStream else c.errorStream).bufferedReader().readText()
+                    if (code !in 200..299) "ERROR: HTTP $code"
+                    else body.take(12000)
+                }
+                "notify" -> {
+                    val title = args.optString("title", "Iris")
+                    val text = args.optString("text", "")
+                    val nm = ctx.getSystemService(NotificationManager::class.java)
+                    nm.createNotificationChannel(NotificationChannel("agent_msgs", "Agent messages", NotificationManager.IMPORTANCE_DEFAULT))
+                    nm.notify(
+                        (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+                        Notification.Builder(ctx, "agent_msgs")
+                            .setSmallIcon(R.drawable.ic_stat_face)
+                            .setContentTitle(title)
+                            .setContentText(text)
+                            .setStyle(Notification.BigTextStyle().bigText(text))
+                            .build()
+                    )
+                    "ok"
+                }
+                "speak" -> {
+                    Voice.say(ctx, args.getString("text"))
+                    "speaking"
+                }
+                "battery" -> {
+                    val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                    val level = i?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                    val scale = i?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+                    val status = i?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                    val charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+                    "${(level * 100 / scale)}% ${if (charging) "charging" else "not charging"}"
+                }
+                "clipboard_get" -> {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString() ?: "(empty)"
+                }
+                "clipboard_set" -> {
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("iris", args.getString("text")))
+                    "copied"
+                }
+                "torch" -> {
+                    val on = args.getBoolean("on")
+                    val cam = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val id = cam.cameraIdList.firstOrNull {
+                        cam.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                    } ?: return "ERROR: no flash"
+                    cam.setTorchMode(id, on)
+                    if (on) "on" else "off"
+                }
+                "set_alarm" -> {
+                    val i = Intent(AlarmClock.ACTION_SET_ALARM)
+                        .putExtra(AlarmClock.EXTRA_HOUR, args.getInt("hour"))
+                        .putExtra(AlarmClock.EXTRA_MINUTES, args.getInt("minute"))
+                        .putExtra(AlarmClock.EXTRA_MESSAGE, args.optString("label", "Iris"))
+                        .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(i)
+                    "alarm set"
+                }
+                "set_timer" -> {
+                    val i = Intent(AlarmClock.ACTION_SET_TIMER)
+                        .putExtra(AlarmClock.EXTRA_LENGTH, args.getInt("seconds"))
+                        .putExtra(AlarmClock.EXTRA_MESSAGE, args.optString("label", "Iris"))
+                        .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(i)
+                    "timer set"
+                }
+                "compose_sms" -> {
+                    val i = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${args.getString("number")}"))
+                        .putExtra("sms_body", args.getString("text"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(i)
+                    "composer opened"
+                }
+                "dial" -> {
+                    val i = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${args.getString("number")}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(i)
+                    "dialer opened"
+                }
+                "read_file" -> {
+                    val f = safe(ctx, args.getString("path"))
+                    if (!f.exists()) "ERROR: not found" else f.readText().take(20000)
+                }
+                "write_file" -> {
+                    val f = safe(ctx, args.getString("path"))
+                    f.parentFile?.mkdirs()
+                    f.writeText(args.getString("content"))
+                    "wrote ${f.length()} bytes"
+                }
+                "list_files" -> {
+                    val dir = safe(ctx, args.optString("path", "."))
+                    if (!dir.isDirectory) "ERROR: not a directory"
+                    else dir.listFiles()?.joinToString("\n") { "${if (it.isDirectory) "d" else "f"} ${it.name} ${it.length()}" } ?: "(empty)"
+                }
+                "list_uploads" -> {
+                    val a = Media.list(ctx)
+                    if (a.length() == 0) "(no uploads yet — ask the user to attach a file or take a screenshot)"
+                    else (0 until a.length()).joinToString("\n") { i ->
+                        val o = a.getJSONObject(i)
+                        "${o.optString("id")}  ${o.optString("kind")}  ${o.optString("name")}  (${o.optString("added")}, ${o.optLong("bytes")} bytes)"
+                    }
+                }
+                "analyze_upload" -> analyzeUpload(ctx, args.getString("id"), args.optString("question", "Describe this and extract any useful information."))
+                "delete_upload" -> if (Media.delete(ctx, args.getString("id"))) "deleted" else "ERROR: unknown id"
+                "screenshot" -> {
+                    val svc = AgentAccessibilityService.instance ?: return NOSVC
+                    val id = svc.captureToLibrary(ctx)
+                    if (id.startsWith("ERROR")) id else "saved screenshot as upload id=$id"
+                }
+                "list_notifications" -> {
+                    // placeholder – real impl lives in notification listener if present
+                    "(notification access not wired in this build — enable notification access for richer results)"
+                }
+                "reply_notification" -> "ERROR: reply requires notification listener service"
+                "screen_read" -> {
+                    val svc = AgentAccessibilityService.instance ?: return NOSVC
+                    svc.screenRead()
+                }
+                "tap_text" -> {
+                    val svc = AgentAccessibilityService.instance ?: return NOSVC
+                    svc.tapText(args.getString("text"))
+                }
+                "tap_xy" -> {
+                    val svc = AgentAccessibilityService.instance ?: return NOSVC
+                    svc.tapXy(args.getDouble("x").toFloat(), args.getDouble("y").toFloat())
+                }
+                "type_text" -> {
+                    val svc = AgentAccessibilityService.instance ?: return NOSVC
+                    svc.typeText(args.getString("text"), args.optBoolean("append", false))
+                }
+                "scroll" -> {
+                    val svc = AgentAccessibilityService.instance ?: return NOSVC
+                    svc.scroll(args.getString("direction"))
+                }
+                "press" -> {
+                    val svc = AgentAccessibilityService.instance ?: return NOSVC
+                    svc.press(args.getString("key"))
+                }
+                else -> "ERROR: unknown tool $name"
+            }.also {
+                if (name in settle) Thread.sleep(600)
+            }
+        } catch (e: Exception) {
+            "ERROR: ${e.message}"
+        }
     }
 
     private fun analyzeUpload(ctx: Context, id: String, question: String): String {
@@ -112,7 +287,7 @@ object Tools {
             }
             "image" -> {
                 val b64 = Media.imageBase64(ctx, id) ?: return "ERROR: could not decode image"
-                geminiVision(key, model, b64, "image/jpeg", question.ifBlank { "Describe this image and extract any text or useful data." })
+                geminiVision(key, model, b64, "image/jpeg", question.ifBlank { "Describe this image in detail and extract any text or useful data." })
             }
             else -> "ERROR: kind '$kind' not analysed automatically; file is stored as id=$id"
         }
@@ -130,8 +305,8 @@ object Tools {
         val code = c.responseCode
         val resp = (if (code in 200..299) c.inputStream else c.errorStream).bufferedReader().readText()
         if (code !in 200..299) return "ERROR: Gemini HTTP $code ${resp.take(200)}"
-        return JSONObject(resp).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
-            ?.optJSONArray("parts")?.optJSONObject(0)?.optString("text") ?: "ERROR: empty model reply"
+        val parts = JSONObject(resp).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+        return parts?.optJSONObject(0)?.optString("text") ?: "ERROR: empty model reply"
     }
 
     private fun geminiVision(key: String, model: String, b64: String, mime: String, question: String): String {
@@ -148,7 +323,14 @@ object Tools {
         val code = c.responseCode
         val resp = (if (code in 200..299) c.inputStream else c.errorStream).bufferedReader().readText()
         if (code !in 200..299) return "ERROR: Gemini HTTP $code ${resp.take(200)}"
-        return JSONObject(resp).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
-            ?.optJSONArray("parts")?.optJSONObject(0)?.optString("text") ?: "ERROR: empty model reply"
+        val p = JSONObject(resp).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+        return p?.optJSONObject(0)?.optString("text") ?: "ERROR: empty model reply"
+    }
+
+    private fun safe(ctx: Context, path: String): File {
+        val base = ctx.filesDir.canonicalFile
+        val f = File(base, path).canonicalFile
+        require(f.path.startsWith(base.path)) { "path outside agent storage" }
+        return f
     }
 }
