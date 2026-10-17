@@ -71,7 +71,11 @@ object Tools {
         T("run_shell", "Run a shell command with normal app permissions (no root). Working directory is the agent private storage. Timeout seconds optional (default 15, max 60).", mapOf("command" to S, "timeout" to N), setOf("timeout")),
         T("save_script", "Save a reusable shell script under scripts/ in agent storage. name is basename only (e.g. backup.sh).", mapOf("name" to S, "content" to S)),
         T("list_scripts", "List saved scripts under scripts/."),
-        T("run_script", "Run a previously saved script by name (basename). Optional args string appended after the script path.", mapOf("name" to S, "args" to S), setOf("args"))
+        T("run_script", "Run a previously saved script by name (basename). Optional args string appended after the script path.", mapOf("name" to S, "args" to S), setOf("args")),
+        T("memory_set", "Store a durable fact about the user or environment under a short key (e.g. name, timezone, preference).", mapOf("key" to S, "value" to S)),
+        T("memory_get", "Read a stored memory by key.", mapOf("key" to S)),
+        T("memory_list", "List all stored memory keys and values."),
+        T("memory_delete", "Delete a memory entry by key.", mapOf("key" to S))
     )
 
     private val settle = setOf("open_app", "open_url", "tap_text", "tap_xy", "type_text", "scroll",
@@ -301,6 +305,35 @@ object Tools {
                     val cmd = if (extra.isEmpty()) "sh \"${f.absolutePath}\"" else "sh \"${f.absolutePath}\" $extra"
                     runShell(ctx, cmd, 30)
                 }
+                "memory_set" -> {
+                    val key = normalizeMemKey(args.getString("key"))
+                    if (key == null) return@run "ERROR: invalid key (use short alphanumeric/underscore)"
+                    val value = args.getString("value").take(2000)
+                    val mem = loadMemory(ctx)
+                    mem.put(key, value)
+                    saveMemory(ctx, mem)
+                    "remembered $key"
+                }
+                "memory_get" -> {
+                    val key = normalizeMemKey(args.getString("key"))
+                    if (key == null) return@run "ERROR: invalid key"
+                    val mem = loadMemory(ctx)
+                    if (!mem.has(key)) "ERROR: unknown key" else mem.getString(key)
+                }
+                "memory_list" -> {
+                    val mem = loadMemory(ctx)
+                    if (mem.length() == 0) "(empty)"
+                    else mem.keys().asSequence().sorted().joinToString("\n") { k -> "$k = ${mem.optString(k)}" }
+                }
+                "memory_delete" -> {
+                    val key = normalizeMemKey(args.getString("key"))
+                    if (key == null) return@run "ERROR: invalid key"
+                    val mem = loadMemory(ctx)
+                    if (!mem.has(key)) return@run "ERROR: unknown key"
+                    mem.remove(key)
+                    saveMemory(ctx, mem)
+                    "deleted $key"
+                }
                 else -> "ERROR: unknown tool $name"
             }.also {
                 if (name in settle) Thread.sleep(600)
@@ -376,10 +409,6 @@ object Tools {
         return p?.optJSONObject(0)?.optString("text") ?: "ERROR: empty model reply"
     }
 
-    /**
-     * Run a shell command with the app's normal permissions.
-     * cwd = filesDir; no root; stdout+stderr captured; timed out.
-     */
     private fun runShell(ctx: Context, command: String, timeoutSec: Int): String {
         if (command.isBlank()) return "ERROR: empty command"
         val lower = command.lowercase(Locale.US)
@@ -406,6 +435,25 @@ object Tools {
         } catch (e: Exception) {
             "ERROR: ${e.message}"
         }
+    }
+
+    private fun normalizeMemKey(raw: String): String? {
+        val k = raw.trim().lowercase(Locale.US)
+        if (k.isEmpty() || k.length > 64) return null
+        if (!k.matches(Regex("[a-z0-9_./-]+"))) return null
+        return k
+    }
+
+    private fun memFile(ctx: Context) = File(ctx.filesDir, "memory.json")
+
+    private fun loadMemory(ctx: Context): JSONObject {
+        val f = memFile(ctx)
+        if (!f.isFile) return JSONObject()
+        return try { JSONObject(f.readText()) } catch (_: Exception) { JSONObject() }
+    }
+
+    private fun saveMemory(ctx: Context, mem: JSONObject) {
+        memFile(ctx).writeText(mem.toString(2))
     }
 
     private fun safe(ctx: Context, path: String): File {
