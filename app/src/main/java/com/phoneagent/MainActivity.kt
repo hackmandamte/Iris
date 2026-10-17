@@ -182,7 +182,6 @@ class MainActivity : Activity() {
     private fun note(text: String, italic: Boolean): TextView = TextView(this).apply {
         this.text = text
         textSize = 12f
-        setTextColor(MUTED)
         setTypeface(null, if (italic) Typeface.ITALIC else Typeface.NORMAL)
         maxWidth = (resources.displayMetrics.widthPixels * 0.9).toInt()
     }
@@ -525,15 +524,20 @@ class MainActivity : Activity() {
             .setMessage("On the PC, start pairing and copy the iris:// link (or scan the QR).")
             .setView(field)
             .setPositiveButton("Pair") { _, _ ->
-                val link = field.text.toString().trim()
-                if (link.isEmpty()) return@setPositiveButton
-                try {
-                    Pc.pair(this, link)
-                    Toast.makeText(this, "Paired", Toast.LENGTH_SHORT).show()
+                val raw = field.text.toString().trim()
+                if (raw.isEmpty()) return@setPositiveButton
+                val link = Pc.parseLink(raw)
+                if (link == null) {
+                    Toast.makeText(this, "Invalid pairing link", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val err = Pc.pair(this, link, android.os.Build.MODEL, true)
+                if (err != null) {
+                    Toast.makeText(this, "Pair failed: $err", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, "Paired with ${link.pcName}", Toast.LENGTH_SHORT).show()
                     refreshPcChip()
                     Pc.startPolling(applicationContext)
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Pair failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
             .setNegativeButton("Cancel", null)
