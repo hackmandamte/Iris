@@ -21,6 +21,7 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 object Tools {
     private const val S = "STRING"
@@ -66,7 +67,11 @@ object Tools {
         T("tap_xy", "Tap screen coordinates.", mapOf("x" to N, "y" to N), screen = true),
         T("type_text", "Type into the focused text field (tap it first).", mapOf("text" to S, "append" to B), setOf("append"), screen = true),
         T("scroll", "Scroll: 'down' reveals content below, 'up' above, 'left'/'right' sideways.", mapOf("direction" to S), screen = true),
-        T("press", "Press a system key: back, home, recents, notifications, quick_settings.", mapOf("key" to S), screen = true)
+        T("press", "Press a system key: back, home, recents, notifications, quick_settings.", mapOf("key" to S), screen = true),
+        T("run_shell", "Run a shell command with normal app permissions (no root). Working directory is the agent private storage. Timeout seconds optional (default 15, max 60).", mapOf("command" to S, "timeout" to N), setOf("timeout")),
+        T("save_script", "Save a reusable shell script under scripts/ in agent storage. name is basename only (e.g. backup.sh).", mapOf("name" to S, "content" to S)),
+        T("list_scripts", "List saved scripts under scripts/."),
+        T("run_script", "Run a previously saved script by name (basename). Optional args string appended after the script path.", mapOf("name" to S, "args" to S), setOf("args"))
     )
 
     private val settle = setOf("open_app", "open_url", "tap_text", "tap_xy", "type_text", "scroll",
@@ -266,6 +271,36 @@ object Tools {
                     val svc = AgentAccessibilityService.instance ?: return NOSVC
                     svc.press(args.getString("key"))
                 }
+                "run_shell" -> {
+                    val cmd = args.getString("command")
+                    val timeout = args.optInt("timeout", 15).coerceIn(1, 60)
+                    runShell(ctx, cmd, timeout)
+                }
+                "save_script" -> {
+                    val name = args.getString("name").trim().replace("..", "").replace("/", "").replace("\\", "")
+                    if (name.isEmpty() || !name.matches(Regex("[A-Za-z0-9._-]+"))) return@run "ERROR: invalid script name"
+                    val dir = File(ctx.filesDir, "scripts")
+                    dir.mkdirs()
+                    val f = File(dir, name)
+                    f.writeText(args.getString("content"))
+                    f.setExecutable(true)
+                    "saved scripts/$name (${f.length()} bytes)"
+                }
+                "list_scripts" -> {
+                    val dir = File(ctx.filesDir, "scripts")
+                    if (!dir.isDirectory) "(no scripts yet)"
+                    else dir.listFiles()?.sortedBy { it.name }?.joinToString("\n") {
+                        "${it.name}  ${it.length()} bytes"
+                    } ?: "(empty)"
+                }
+                "run_script" -> {
+                    val name = args.getString("name").trim().replace("..", "").replace("/", "").replace("\\", "")
+                    val f = File(File(ctx.filesDir, "scripts"), name)
+                    if (!f.isFile) return@run "ERROR: script not found: $name"
+                    val extra = args.optString("args", "").trim()
+                    val cmd = if (extra.isEmpty()) "sh \"${f.absolutePath}\"" else "sh \"${f.absolutePath}\" $extra"
+                    runShell(ctx, cmd, 30)
+                }
                 else -> "ERROR: unknown tool $name"
             }.also {
                 if (name in settle) Thread.sleep(600)
@@ -339,6 +374,38 @@ object Tools {
         if (code !in 200..299) return "ERROR: Gemini HTTP $code ${resp.take(200)}"
         val p = JSONObject(resp).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
         return p?.optJSONObject(0)?.optString("text") ?: "ERROR: empty model reply"
+    }
+
+    /**
+     * Run a shell command with the app's normal permissions.
+     * cwd = filesDir; no root; stdout+stderr captured; timed out.
+     */
+    private fun runShell(ctx: Context, command: String, timeoutSec: Int): String {
+        if (command.isBlank()) return "ERROR: empty command"
+        val lower = command.lowercase(Locale.US)
+        val blocked = listOf("su ", "su\n", "magisk", "pm uninstall", "rm -rf /", "mkfs", "dd if=")
+        for (b in blocked) {
+            if (lower.contains(b)) return "ERROR: command blocked for safety (needs explicit user approval path): $b"
+        }
+        return try {
+            val pb = ProcessBuilder("sh", "-c", command)
+            pb.directory(ctx.filesDir)
+            pb.redirectErrorStream(true)
+            val env = pb.environment()
+            env["HOME"] = ctx.filesDir.absolutePath
+            env["TMPDIR"] = ctx.cacheDir.absolutePath
+            val proc = pb.start()
+            val finished = proc.waitFor(timeoutSec.toLong(), TimeUnit.SECONDS)
+            if (!finished) {
+                proc.destroyForcibly()
+                return "ERROR: timed out after ${timeoutSec}s"
+            }
+            val out = proc.inputStream.bufferedReader().use { it.readText() }.take(12000)
+            val code = proc.exitValue()
+            if (out.isBlank()) "exit $code (no output)" else "exit $code\n$out"
+        } catch (e: Exception) {
+            "ERROR: ${e.message}"
+        }
     }
 
     private fun safe(ctx: Context, path: String): File {
