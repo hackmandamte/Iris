@@ -99,6 +99,8 @@ When screen tools are available: screen_read, then act, then screen_read again.
 Before irreversible actions, ask the user for confirmation.
 Use list_uploads, analyze_upload, screenshot, schedule_post (after user approves exact text/platform/time).
 Call now for the date before scheduling.
+Shell: run_shell for one-off commands (app permissions only, no root). Prefer save_script + run_script for reusable work.
+Memory: use memory_set / memory_get / memory_list for durable facts about the user (name, preferences, routines). Recall relevant memory when it helps.
 Keep final answers short, in plain short paragraphs (no markdown headings, bold, or lists with # or *). Suitable for TTS.
 If the user says mute or unmute, or asks to stop speaking, call set_speak with on=false or on=true."""
 
@@ -148,7 +150,6 @@ If the user says mute or unmute, or asks to stop speaking, call set_speak with o
         return t.id
     }
 
-    /** Continue an existing task (used by MainActivity reply flow). */
     fun reply(id: Int, text: String): Int = send(text, id)
 
     fun summarizeScreen() {
@@ -175,7 +176,6 @@ If the user says mute or unmute, or asks to stop speaking, call set_speak with o
             false)
     }
 
-    /** Alias used by older Social/MainActivity code. */
     fun dailySummary() = runDigest()
 
     fun runScheduledPost(id: String) {
@@ -485,7 +485,6 @@ If the user says mute or unmute, or asks to stop speaking, call set_speak with o
         }
     }
 
-    /** Preferred model first, then known-good Gemini fallbacks (skip duplicates). */
     private fun modelChain(preferred: String): List<String> {
         val fallbacks = listOf(
             "gemini-2.5-flash",
@@ -517,7 +516,6 @@ If the user says mute or unmute, or asks to stop speaking, call set_speak with o
             val models = modelChain(model)
             for ((mi, m) in models.withIndex()) {
                 if (t.cancelled) throw RuntimeException("cancelled")
-                // Fewer retries on later fallback models to keep total latency bounded
                 val maxAttempts = if (mi == 0) 3 else 2
                 for (attempt in 0 until maxAttempts) {
                     if (t.cancelled) throw RuntimeException("cancelled")
@@ -539,9 +537,7 @@ If the user says mute or unmute, or asks to stop speaking, call set_speak with o
                             return JSONObject(text)
                         }
                         lastErr = "HTTP $code ($m): ${text.take(240)}"
-                        // 400 / 404 → model unavailable or bad request; try next model
                         if (code in intArrayOf(400, 404)) break
-                        // 429 / 500 / 503 → retry then fallback
                         if (code !in intArrayOf(429, 500, 503)) break
                     } catch (e: java.io.IOException) {
                         lastErr = "${e.message ?: "network error"} ($m)"
