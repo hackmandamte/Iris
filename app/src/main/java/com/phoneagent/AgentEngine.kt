@@ -139,7 +139,6 @@ object AgentEngine {
     fun reply(id: Int, text: String) {
         val t = task(id) ?: return
         emit(id, "You: $text")
-        // continue same task history
         t.history.put(JSONObject()
             .put("role", "user")
             .put("parts", JSONArray().put(JSONObject().put("text", text))))
@@ -154,6 +153,7 @@ object AgentEngine {
             ScreenLease.release(it)
             notifyState()
         }
+        Voice.stop()
     }
 
     fun stopAll() {
@@ -164,6 +164,7 @@ object AgentEngine {
                 ScreenLease.release(it)
             }
         }
+        Voice.stop()
         notifyState()
     }
 
@@ -339,8 +340,13 @@ Social: draft captions/replies in plain text; only schedule or send after the us
             if (calls.isEmpty()) {
                 val reply = textOut.ifBlank { "(done)" }
                 emit(t.id, "🤖 $reply")
-                express(t, Expr(Mood.REPORT, reply.take(80)))
-                if (p.getBoolean("speak", false) && !t.quiet) Voice.say(app, reply)
+                // Speak by default (matches Settings toggle default = on)
+                if (p.getBoolean("speak", true) && !t.quiet) {
+                    express(t, Expr(Mood.SPEAKING, reply.take(80)))
+                    Voice.say(app, reply)
+                } else {
+                    express(t, Expr(Mood.REPORT, reply.take(80)))
+                }
                 t.state = "done"
                 t.postId?.let { Posts.setStatus(app, it, "done") }
                 return
