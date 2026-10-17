@@ -15,15 +15,9 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
-/** A paired computer running Iris for PC. */
 class PcDevice(val id: String, val name: String, val host: String, val port: Int, val key: ByteArray)
-
-/** An approval the PC is waiting for (shell command, file write, screen control). */
 class PcApproval(val id: String, val dev: PcDevice, val taskId: Int, val kind: String, val text: String)
 
-/**
- * Link to Iris for PC over the local network. Everything after the QR scan is AES-256-GCM encrypted.
- */
 object Pc {
     private const val AAD_PAIR = "iris-pair"
     private const val AAD_API = "iris-api"
@@ -148,33 +142,37 @@ object Pc {
         sp(ctx).edit().putString("inbox", next.toString()).apply()
     }
 
+    fun pollOnce(ctx: Context) {
+        for (d in devices(ctx)) {
+            try {
+                val r = call(d, "inbox")
+                val arr = r.optJSONArray("items") ?: continue
+                if (arr.length() == 0) continue
+                val existing = inbox(ctx).map { it.optString("id") }.toSet()
+                val cur = JSONArray(sp(ctx).getString("inbox", "[]"))
+                var changed = false
+                for (i in 0 until arr.length()) {
+                    val item = arr.getJSONObject(i)
+                    if (item.optString("id") !in existing) {
+                        cur.put(item)
+                        changed = true
+                    }
+                }
+                if (changed) {
+                    sp(ctx).edit().putString("inbox", cur.toString()).apply()
+                    inboxListeners.forEach { it() }
+                }
+            } catch (_: Exception) { }
+        }
+    }
+
     fun startPolling(ctx: Context) {
         if (polling) return
         polling = true
         val app = ctx.applicationContext
         thread(name = "pc-poll") {
             while (polling) {
-                try {
-                    for (d in devices(app)) {
-                        val r = call(d, "inbox")
-                        val arr = r.optJSONArray("items") ?: continue
-                        if (arr.length() == 0) continue
-                        val existing = inbox(app).map { it.optString("id") }.toSet()
-                        val cur = JSONArray(sp(app).getString("inbox", "[]"))
-                        var changed = false
-                        for (i in 0 until arr.length()) {
-                            val item = arr.getJSONObject(i)
-                            if (item.optString("id") !in existing) {
-                                cur.put(item)
-                                changed = true
-                            }
-                        }
-                        if (changed) {
-                            sp(app).edit().putString("inbox", cur.toString()).apply()
-                            inboxListeners.forEach { it() }
-                        }
-                    }
-                } catch (_: Exception) { }
+                try { pollOnce(app) } catch (_: Exception) { }
                 Thread.sleep(2500)
             }
         }
