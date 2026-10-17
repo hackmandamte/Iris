@@ -59,11 +59,11 @@ class MainActivity : Activity() {
     private lateinit var taskScroll: HorizontalScrollView
     private lateinit var taskRow: LinearLayout
     private lateinit var aliveChip: TextView
-    private var runOnPc = false                  // new tasks go to the paired PC
+    private var runOnPc = false
     private lateinit var pcChip: TextView
     private val shownApprovals = HashSet<String>()
     private var inboxOpen = false
-    private var targetId: Int? = null            // task you are replying to (null = start a new task)
+    private var targetId: Int? = null
     private var lastTag = -1
     private val steps = HashMap<Int, Pair<TextView, String>>()
     private val ui = Handler(Looper.getMainLooper())
@@ -105,7 +105,6 @@ class MainActivity : Activity() {
             .apply()
     }
 
-    // ---- task pills and status ----
     private fun stateIcon(s: String) = when (s) {
         "working" -> "●"; "needs screen" -> "◔"; "needs approval" -> "?"; "queued" -> "○"; "done" -> "✓"; "error" -> "!"; else -> "■"
     }
@@ -164,7 +163,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // ---- chat rendering: task tags, bubbles, step lines, notes ----
     private fun add(v: View, g: Int = Gravity.START, top: Int = 8) {
         chat.addView(v, lp(WRAP, WRAP, t = top).apply { gravity = g })
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
@@ -238,7 +236,6 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
 
-        // widgets other code needs early
         send = TextView(this).apply {
             text = "↑"; textSize = 20f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
             background = shape(INK, 20)
@@ -266,7 +263,6 @@ class MainActivity : Activity() {
             setPadding(dp(14), dp(14), dp(14), dp(10))
         }
 
-        // header: logo, title, settings
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -284,7 +280,6 @@ class MainActivity : Activity() {
         header.addView(settingsChip)
         root.addView(header)
 
-        // settings card (open until a key is saved)
         keyField = EditText(this).apply {
             hint = "Gemini API key"
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -307,7 +302,6 @@ class MainActivity : Activity() {
         }
         root.addView(settingsCard, lp(MATCH, WRAP, t = 10))
 
-        // control chips: Screen control | Face island | status
         val screenChip = chip("Screen control")
         styleChip(screenChip, AgentAccessibilityService.instance != null)
         screenChip.setOnClickListener {
@@ -327,9 +321,7 @@ class MainActivity : Activity() {
                     Toast.makeText(this, "Allow 'Display over other apps', then come back", Toast.LENGTH_LONG).show()
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
                 } else {
-                    try {
-                        startForegroundService(Intent(this, OverlayService::class.java))
-                    } catch (e: Exception) { }
+                    try { startForegroundService(Intent(this, OverlayService::class.java)) } catch (e: Exception) { }
                 }
             } else if (!AgentEngine.running && !prefs().getBoolean("quick_on", true)) {
                 startService(Intent(this, OverlayService::class.java).setAction("STOP"))
@@ -345,7 +337,6 @@ class MainActivity : Activity() {
         chips.addView(status)
         root.addView(chips, lp(MATCH, WRAP, t = 10))
 
-        // social / quick / alive / PC row
         val queueChip = chip("Post queue")
         styleChip(queueChip, false)
         queueChip.setOnClickListener { showPostQueue() }
@@ -359,9 +350,7 @@ class MainActivity : Activity() {
             prefs().edit().putBoolean("quick_on", on).apply()
             styleChip(quickChip, on)
             if (on) {
-                try {
-                    startForegroundService(Intent(this, OverlayService::class.java))
-                } catch (e: Exception) { }
+                try { startForegroundService(Intent(this, OverlayService::class.java)) } catch (e: Exception) { }
                 val svc = AgentAccessibilityService.instance
                 if (svc != null) Quick.enable(svc, true)
             } else {
@@ -394,16 +383,13 @@ class MainActivity : Activity() {
         }
         root.addView(social, lp(MATCH, WRAP, t = 8))
 
-        // running tasks
         root.addView(taskScroll, lp(MATCH, WRAP, t = 8))
         root.addView(View(this).apply { setBackgroundColor(LINE) }, lp(MATCH, dp(1), t = 12))
 
-        // chat
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply { addView(chat) }
         root.addView(scroll, lp(MATCH, 0, 1f))
 
-        // input bar: mic | field | send
         val mic = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_btn_speak_now)
             setColorFilter(ACCENT)
@@ -583,7 +569,7 @@ class MainActivity : Activity() {
         val items = arrayOf(
             if (on) "Turn off daily summary" else "Turn on daily summary",
             "Run summary now",
-            "Set time (currently ${\"%02d\".format(hour)}:00)"
+            "Set time (currently ${"%02d".format(hour)}:00)"
         )
         AlertDialog.Builder(this)
             .setTitle("Daily summary")
@@ -597,7 +583,7 @@ class MainActivity : Activity() {
                         } else {
                             Posts.scheduleDigest(this, hour.coerceIn(0, 23))
                             styleChip(chip, true)
-                            Toast.makeText(this, "Daily summary at ${\"%02d\".format(hour)}:00", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, "Daily summary at ${"%02d".format(hour)}:00", Toast.LENGTH_SHORT).show()
                         }
                     }
                     1 -> {
@@ -606,13 +592,13 @@ class MainActivity : Activity() {
                         refreshTasks()
                     }
                     2 -> {
-                        val hours = (0..23).map { \"%02d:00\".format(it) }.toTypedArray()
+                        val hours = (0..23).map { "%02d:00".format(it) }.toTypedArray()
                         AlertDialog.Builder(this)
                             .setTitle("Digest hour")
                             .setItems(hours) { _, h ->
                                 Posts.scheduleDigest(this, h)
                                 styleChip(chip, true)
-                                Toast.makeText(this, "Daily summary at ${\"%02d\".format(h)}:00", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this, "Daily summary at ${"%02d".format(h)}:00", Toast.LENGTH_SHORT).show()
                             }
                             .setNegativeButton("Cancel", null)
                             .show()
@@ -663,7 +649,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // Voice result goes into the text field so you can check it before sending.
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -683,9 +668,7 @@ class MainActivity : Activity() {
         if (quick || (sp.getBoolean("bubble", false) && Settings.canDrawOverlays(this))) {
             try {
                 startForegroundService(Intent(this, OverlayService::class.java))
-            } catch (e: Exception) {
-                // Missing FGS type / permission / OEM restriction – avoid crash loop
-            }
+            } catch (e: Exception) { }
         }
         if (quick) AgentAccessibilityService.instance?.let { Quick.enable(it, true) }
         refreshAlive()
