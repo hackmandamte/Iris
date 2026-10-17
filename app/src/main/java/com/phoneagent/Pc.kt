@@ -7,85 +7,120 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.CopyOnWriteArraySet
 import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 
-data class PcDevice(val id: String, val name: String, val host: String, val port: Int, val key: ByteArray)
+/** A paired computer running Iris for PC. */
+class PcDevice(val id: String, val name: String, val host: String, val port: Int, val key: ByteArray)
 
+/** An approval the PC is waiting for (shell command, file write, screen control). */
+class PcApproval(val id: String, val dev: PcDevice, val taskId: Int, val kind: String, val text: String)
+
+/**
+ * Link to Iris for PC over the local network. Everything after the QR scan is AES-256-GCM encrypted.
+ */
 object Pc {
-    data class Link(val host: String, val port: Int, val keyB64: String, val pcName: String)
-
+    private const val AAD_PAIR = "iris-pair"
+    private const val AAD_API = "iris-api"
+    private val rnd = SecureRandom()
     val inboxListeners = CopyOnWriteArraySet<() -> Unit>()
     @Volatile private var polling = false
 
-    fun parseLink(s: String): Link? {
-        return try {
-            val u = Uri.parse(s)
-            if (u.scheme != "iris" || u.host != "pair") return null
-            Link(
-                host = u.getQueryParameter("h") ?: return null,
-                port = u.getQueryParameter("p")?.toIntOrNull() ?: return null,
-                keyB64 = u.getQueryParameter("k") ?: return null,
-                pcName = u.getQueryParameter("n") ?: "PC"
-            )
-        } catch (e: Exception) { null }
-    }
+    class Link(val host: String, val port: Int, val token: String, val pcName: String)
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences("agent_pc", Context.MODE_PRIVATE)
+    private fun b64(b: ByteArray): String = Base64.encodeToString(b, Base64.NO_WRAP)
+    private fun unb64(s: String): ByteArray = Base64.decode(s, Base64.DEFAULT)
+    private fun sha256(s: String): ByteArray = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
+
+    private fun seal(key: ByteArray, obj: JSONObject, aad: String): JSONObject {
+        val iv = ByteArray(12)
+        rnd.nextBytes(iv)
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
+        c.updateAAD(aad.toByteArray())
+        return JSONObject().put("n", b64(iv)).put("c", b64(c.doFinal(obj.toString().toByteArray())))
+    }
+
+    private fun unseal(key: ByteArray, env: JSONObject, aad: String): JSONObject {
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, unb64(env.getString("n"))))
+        c.updateAAD(aad.toByteArray())
+        return JSONObject(String(c.doFinal(unb64(env.getString("c")))))
+    }
+
+    private fun http(host: String, port: Int, path: String, body: JSONObject): Pair<Int, JSONObject> {
+        val c = URL("http://$host:$port$path").openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.doOutput = true
+        c.connectTimeout = 6000
+        c.readTimeout = 20000
+        c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(body.toString().toByteArray()) }
+        val code = c.responseCode
+        val stream = if (code in 200..299) c.inputStream else c.errorStream
+        val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+        val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
+        return Pair(code, json)
+    }
 
     fun devices(ctx: Context): List<PcDevice> {
-        val raw = sp(ctx).getString("devices", "[]") ?: "[]"
-        val a = try { JSONArray(raw) } catch (e: Exception) { return emptyList() }
-        val out = ArrayList<PcDevice>()
-        for (i in 0 until a.length()) {
-            val o = a.getJSONObject(i)
-            out.add(PcDevice(
-                o.optString("id"),
-                o.optString("name"),
-                o.optString("host"),
-                o.optInt("port"),
-                Base64.decode(o.optString("key"), Base64.DEFAULT)
-            ))
+        val arr = JSONArray(sp(ctx).getString("devices", "[]"))
+        return (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            PcDevice(o.getString("id"), o.getString("name"), o.getString("host"), o.getInt("port"), unb64(o.getString("key")))
         }
-        return out
     }
 
     fun primary(ctx: Context): PcDevice? = devices(ctx).firstOrNull()
 
+    private fun save(ctx: Context, list: List<PcDevice>) {
+        val arr = JSONArray()
+        for (d in list) {
+            arr.put(JSONObject().put("id", d.id).put("name", d.name).put("host", d.host)
+                .put("port", d.port).put("key", b64(d.key)))
+        }
+        sp(ctx).edit().putString("devices", arr.toString()).apply()
+    }
+
+    fun remove(ctx: Context, id: String) = save(ctx, devices(ctx).filter { it.id != id })
+
+    fun parseLink(s: String): Link? {
+        val u = try { Uri.parse(s.trim()) } catch (e: Exception) { return null }
+        if (u.scheme != "iris" || u.host != "pair") return null
+        val h = u.getQueryParameter("h") ?: return null
+        val p = u.getQueryParameter("p")?.toIntOrNull() ?: return null
+        val t = u.getQueryParameter("t") ?: return null
+        val n = u.getQueryParameter("n") ?: "PC"
+        return Link(h, p, t, n)
+    }
+
     fun pair(ctx: Context, link: Link, phoneName: String, importSettings: Boolean): String? {
         return try {
-            val key = Base64.decode(link.keyB64, Base64.DEFAULT)
-            val body = JSONObject()
+            val phoneKey = ByteArray(32).also { rnd.nextBytes(it) }
+            val pairKey = sha256(link.token)
+            val req = seal(pairKey, JSONObject()
                 .put("name", phoneName)
-                .put("importSettings", importSettings)
-                .toString()
-            val resp = post(link.host, link.port, "/pair", body, key)
-            if (resp == null) return "Could not reach the PC"
-            val o = JSONObject(resp)
-            if (o.optString("error").isNotEmpty()) return o.optString("error")
-            val id = o.optString("id", link.pcName)
-            val arr = JSONArray(sp(ctx).getString("devices", "[]"))
-            // replace existing with same host
-            val next = JSONArray()
-            for (i in 0 until arr.length()) {
-                val d = arr.getJSONObject(i)
-                if (d.optString("host") != link.host) next.put(d)
-            }
-            next.put(JSONObject()
-                .put("id", id)
-                .put("name", link.pcName)
-                .put("host", link.host)
-                .put("port", link.port)
-                .put("key", link.keyB64))
-            sp(ctx).edit().putString("devices", next.toString()).apply()
+                .put("key", b64(phoneKey))
+                .put("importSettings", importSettings), AAD_PAIR)
+            val (code, resp) = http(link.host, link.port, "/pair", req)
+            if (code !in 200..299) return "HTTP $code"
+            val plain = unseal(pairKey, resp, AAD_PAIR)
+            if (plain.has("error")) return plain.getString("error")
+            val id = plain.optString("device", link.pcName)
+            val list = devices(ctx).filter { it.host != link.host }.toMutableList()
+            list.add(PcDevice(id, link.pcName, link.host, link.port, phoneKey))
+            save(ctx, list)
             if (importSettings) {
-                o.optJSONObject("settings")?.let { s ->
+                plain.optJSONObject("settings")?.let { s ->
                     ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).edit()
                         .putString("api_key", s.optString("api_key"))
-                        .putString("model", s.optString("model", "gemini-2.0-flash"))
+                        .putString("model", s.optString("model", "gemini-2.5-flash"))
                         .apply()
                 }
             }
@@ -93,61 +128,57 @@ object Pc {
         } catch (e: Exception) { e.message ?: "Pairing failed" }
     }
 
-    private fun encrypt(data: ByteArray, key: ByteArray): ByteArray {
-        val iv = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-        val c = Cipher.getInstance("AES/CBC/PKCS5Padding")
-        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key.copyOf(16), "AES"), IvParameterSpec(iv))
-        return iv + c.doFinal(data)
+    fun call(dev: PcDevice, op: String, extra: JSONObject = JSONObject()): JSONObject {
+        val payload = JSONObject().put("op", op)
+        for (k in extra.keys()) payload.put(k, extra.get(k))
+        val env = seal(dev.key, payload, AAD_API)
+        val (code, resp) = http(dev.host, dev.port, "/api", env)
+        if (code !in 200..299) throw RuntimeException("PC HTTP $code")
+        return unseal(dev.key, resp, AAD_API)
     }
 
-    private fun decrypt(data: ByteArray, key: ByteArray): ByteArray {
-        val iv = data.copyOfRange(0, 16)
-        val c = Cipher.getInstance("AES/CBC/PKCS5Padding")
-        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key.copyOf(16), "AES"), IvParameterSpec(iv))
-        return c.doFinal(data, 16, data.size - 16)
+    fun inbox(ctx: Context): List<JSONObject> {
+        val arr = JSONArray(sp(ctx).getString("inbox", "[]"))
+        return (0 until arr.length()).map { arr.getJSONObject(it) }
     }
 
-    private fun post(host: String, port: Int, path: String, body: String, key: ByteArray): String? {
-        return try {
-            val c = URL("http://$host:$port$path").openConnection() as HttpURLConnection
-            c.requestMethod = "POST"
-            c.doOutput = true
-            c.connectTimeout = 5000
-            c.readTimeout = 15000
-            c.setRequestProperty("Content-Type", "application/octet-stream")
-            val enc = encrypt(body.toByteArray(Charsets.UTF_8), key)
-            c.outputStream.use { it.write(enc) }
-            if (c.responseCode !in 200..299) return null
-            val raw = c.inputStream.readBytes()
-            String(decrypt(raw, key), Charsets.UTF_8)
-        } catch (e: Exception) { null }
+    fun removeInbox(ctx: Context, id: String) {
+        val next = JSONArray()
+        for (o in inbox(ctx)) if (o.optString("id") != id) next.put(o)
+        sp(ctx).edit().putString("inbox", next.toString()).apply()
     }
 
     fun startPolling(ctx: Context) {
         if (polling) return
         polling = true
-        thread {
+        val app = ctx.applicationContext
+        thread(name = "pc-poll") {
             while (polling) {
-                try { pollOnce(ctx) } catch (e: Exception) { }
+                try {
+                    for (d in devices(app)) {
+                        val r = call(d, "inbox")
+                        val arr = r.optJSONArray("items") ?: continue
+                        if (arr.length() == 0) continue
+                        val existing = inbox(app).map { it.optString("id") }.toSet()
+                        val cur = JSONArray(sp(app).getString("inbox", "[]"))
+                        var changed = false
+                        for (i in 0 until arr.length()) {
+                            val item = arr.getJSONObject(i)
+                            if (item.optString("id") !in existing) {
+                                cur.put(item)
+                                changed = true
+                            }
+                        }
+                        if (changed) {
+                            sp(app).edit().putString("inbox", cur.toString()).apply()
+                            inboxListeners.forEach { it() }
+                        }
+                    }
+                } catch (_: Exception) { }
                 Thread.sleep(2500)
             }
         }
     }
 
     fun stopPolling() { polling = false }
-
-    fun pollOnce(ctx: Context) {
-        val devs = devices(ctx)
-        if (devs.isEmpty()) return
-        for (d in devs) {
-            val resp = post(d.host, d.port, "/poll", "{}", d.key) ?: continue
-            val o = JSONObject(resp)
-            val inbox = o.optJSONArray("inbox") ?: continue
-            if (inbox.length() > 0) {
-                // stash and notify
-                sp(ctx).edit().putString("inbox", inbox.toString()).apply()
-                inboxListeners.forEach { it() }
-            }
-        }
-    }
 }
