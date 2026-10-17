@@ -541,8 +541,8 @@ class MainActivity : Activity() {
     }
 
     private fun showPostQueue() {
-        val posts = Posts.list(this)
-        if (posts.isEmpty()) {
+        val arr = Posts.all(this)
+        if (arr.length() == 0) {
             AlertDialog.Builder(this)
                 .setTitle("Post queue")
                 .setMessage("No scheduled posts. Ask Iris to schedule one (it will confirm text, platform and time first).")
@@ -550,6 +550,7 @@ class MainActivity : Activity() {
                 .show()
             return
         }
+        val posts = (0 until arr.length()).map { arr.getJSONObject(it) }
         val items = posts.map { p ->
             val st = p.optString("status")
             val whenStr = try {
