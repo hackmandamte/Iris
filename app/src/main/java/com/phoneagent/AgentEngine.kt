@@ -12,12 +12,16 @@ import java.net.URL
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+/** What the face on the island is doing. */
 enum class Mood { IDLE, THINKING, ACTING, READING, SPEAKING, REPORT, ERROR }
 
+/** One expression update: a mood plus optional text shown beside the face. */
 data class Expr(val mood: Mood, val text: String = "")
 
+/** One job. Each task has its own conversation and runs on its own thread. */
 class Task(
     val id: Int,
     var title: String,
@@ -28,15 +32,48 @@ class Task(
     val summarize: Boolean = false
 ) {
     val history = JSONArray()
-    var remote: PcDevice? = null
+    var remote: PcDevice? = null      // set when this task runs on a paired PC
     @Volatile var remoteId = 0
-    var display: String? = null
+    var display: String? = null       // shown instead of the long prompt (handoffs)
     @Volatile var cancelled = false
+    /** queued, working, needs screen, done, stopped, error */
     @Volatile var state = "queued"
     val active: Boolean get() = state == "queued" || state == "working" || state == "needs screen" || state == "needs approval"
 }
 
-data class PcApproval(val id: String, val title: String, val detail: String)
+/**
+ * The phone has one screen, so tasks take turns using it. A task holds the screen from its first
+ * screen action until it finishes; everything else (thinking, notifications, web, scheduling) runs in parallel.
+ */
+object ScreenLease {
+    private var owner = -1
+    private val waiting = ArrayList<Task>()
+
+    @Synchronized private fun tryTake(t: Task): Boolean {
+        if (owner == t.id) return true
+        if (!waiting.contains(t)) waiting.add(t)
+        if (owner == -1) {
+            val next = waiting.sortedWith(compareByDescending<Task> { it.priority }.thenBy { it.id }).first()
+            if (next.id == t.id) { owner = t.id; waiting.remove(t); return true }
+        }
+        return false
+    }
+
+    @Synchronized private fun leave(t: Task) { waiting.remove(t) }
+    @Synchronized fun holder(): Int = owner
+    @Synchronized fun release(t: Task) { if (owner == t.id) owner = -1; waiting.remove(t) }
+
+    /** Blocks until this task owns the screen. Returns false if cancelled or timed out (timeoutMs 0 = no limit). */
+    fun acquire(t: Task, timeoutMs: Long): Boolean {
+        val end = if (timeoutMs > 0) System.currentTimeMillis() + timeoutMs else Long.MAX_VALUE
+        while (true) {
+            if (t.cancelled) { leave(t); return false }
+            if (tryTake(t)) return true
+            if (System.currentTimeMillis() > end) { leave(t); return false }
+            Thread.sleep(300)
+        }
+    }
+}
 
 class App : Application() {
     override fun onCreate() {
@@ -47,15 +84,19 @@ class App : Application() {
 
 object AgentEngine {
     const val MAX_STEPS = 1_000_000_000_000L
-    private const val MAX_PARALLEL = 5
-    private const val MAX_MODEL_CALLS = 3
+    private const val MAX_PARALLEL = 5      // tasks working at once; more wait in the queue
+    private const val MAX_MODEL_CALLS = 3   // simultaneous model requests (free-tier friendly)
+
+    private val UI_TOOLS = setOf("screen_read", "tap_text", "tap_xy", "type_text", "scroll", "press",
+        "open_app", "open_url", "dial", "compose_sms")
 
     lateinit var app: Context
     val tasks = CopyOnWriteArrayList<Task>()
-    val approvals = CopyOnWriteArrayList<PcApproval>()
+    val approvals = CopyOnWriteArrayList<PcApproval>()   // PC is waiting for the user's OK
+    val entries = ArrayList<Pair<Int, String>>()
     val logListeners = CopyOnWriteArraySet<(Int, String) -> Unit>()
-    val stateListeners = CopyOnWriteArraySet<(Boolean) -> Unit>()
-    val taskListeners = CopyOnWriteArraySet<() -> Unit>()
+    val stateListeners = CopyOnWriteArraySet<(Boolean) -> Unit>()   // any task running?
+    val taskListeners = CopyOnWriteArraySet<() -> Unit>()           // task list or states changed
     val exprListeners = CopyOnWriteArraySet<(Expr) -> Unit>()
 
     private val slots = Semaphore(MAX_PARALLEL, true)
@@ -69,10 +110,14 @@ object AgentEngine {
 
     private fun emit(id: Int, s: String) {
         logListeners.forEach { it(id, s) }
+        synchronized(entries) {
+            entries.add(id to s)
+            while (entries.size > 200) entries.removeAt(0)
+        }
     }
 
-    private fun setExpr(e: Expr) {
-        exprListeners.forEach { it(e) }
+    private fun express(t: Task, e: Expr) {
+        if (!t.quiet) exprListeners.forEach { it(e) }
     }
 
     private fun notifyState() {
@@ -103,6 +148,7 @@ object AgentEngine {
             it.cancelled = true
             it.state = "stopped"
             emit(id, "Stopped")
+            ScreenLease.release(it)
             notifyState()
         }
     }
@@ -112,6 +158,7 @@ object AgentEngine {
             if (it.active) {
                 it.cancelled = true
                 it.state = "stopped"
+                ScreenLease.release(it)
             }
         }
         notifyState()
@@ -119,7 +166,7 @@ object AgentEngine {
 
     fun summarizeScreen() {
         val t = newTask("Screen summary", summarize = true)
-        launch(t, "Summarize what is currently on the screen.", true)
+        launch(t, "Summarize what is currently on the screen. Use screen_read first.", true)
     }
 
     fun dailySummary() {
@@ -144,69 +191,240 @@ object AgentEngine {
     private fun launch(t: Task, text: String, needsUnlock: Boolean) {
         startFgs()
         thread(name = "iris-task-${t.id}") {
-            t.state = "working"
-            notifyState()
-            setExpr(Expr(Mood.THINKING, t.title))
-            emit(t.id, "You: $text")
             try {
+                slots.acquire()
+                if (t.cancelled) return@thread
+                t.state = "working"
+                notifyState()
+                express(t, Expr(Mood.THINKING, t.title))
+                emit(t.id, "You: ${t.display ?: text}")
+
                 if (needsUnlock) {
                     t.state = "needs screen"
                     notifyState()
-                    // brief wait for unlock – simplified
-                    Thread.sleep(500)
+                    wakeAndUnlock()
+                    // give user a moment if locked
+                    var waited = 0
+                    while (isLocked() && waited < 15000 && !t.cancelled) {
+                        Thread.sleep(500)
+                        waited += 500
+                    }
+                    if (t.cancelled) return@thread
                     t.state = "working"
                     notifyState()
                 }
+
                 val key = prefs().getString("api_key", "") ?: ""
-                val model = prefs().getString("model", "gemini-2.0-flash") ?: "gemini-2.0-flash"
                 if (key.isBlank()) {
                     emit(t.id, "⚠ Paste a Gemini API key in Settings first.")
                     t.state = "error"
-                    setExpr(Expr(Mood.ERROR, "No API key"))
+                    express(t, Expr(Mood.ERROR, "No API key"))
                     notifyState()
                     return@thread
                 }
-                modelCalls.acquire()
-                try {
-                    setExpr(Expr(Mood.THINKING))
-                    val reply = callGemini(key, model, text)
-                    emit(t.id, "🤖 $reply")
-                    setExpr(Expr(Mood.REPORT, reply.take(80)))
-                    if (prefs().getBoolean("speak", false)) Voice.say(app, reply)
-                    t.state = "done"
-                } finally {
-                    modelCalls.release()
-                }
+
+                // seed history
+                t.history.put(JSONObject()
+                    .put("role", "user")
+                    .put("parts", JSONArray().put(JSONObject().put("text", text))))
+
+                runLoop(t, key)
             } catch (e: Exception) {
-                emit(t.id, "⚠ ${e.message ?: "error"}")
-                t.state = "error"
-                setExpr(Expr(Mood.ERROR, e.message ?: "error"))
+                if (!t.cancelled) {
+                    emit(t.id, "⚠ ${e.message ?: "error"}")
+                    t.state = "error"
+                    express(t, Expr(Mood.ERROR, e.message ?: "error"))
+                }
+            } finally {
+                ScreenLease.release(t)
+                slots.release()
+                if (t.state == "working" || t.state == "needs screen") t.state = "done"
+                notifyState()
             }
-            notifyState()
         }
     }
 
-    private fun callGemini(key: String, model: String, prompt: String): String {
-        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key")
+    private fun isLocked(): Boolean {
+        val km = app.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        return km.isKeyguardLocked
+    }
+
+    private fun wakeAndUnlock() {
+        try {
+            val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
+            val wl = pm.newWakeLock(
+                PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                "iris:wake"
+            )
+            wl.acquire(3000)
+            wl.release()
+        } catch (_: Exception) { }
+    }
+
+    private val SYSTEM = """
+You are Iris, an autonomous agent on the user's Android phone.
+Reach the user's goal by calling tools step by step. Check each result before the next step.
+When you have the final answer or the task is done, reply with plain text (no more tool calls).
+When screen control tools are available: call screen_read to see the screen, act (tap_text, tap_xy, type_text, scroll, press), then screen_read again to verify. Tap a text field before typing into it.
+Be concise in tool args. Prefer tap_text over coordinates when the label is visible.
+Do not invent tool results. If a tool fails, adapt or ask the user.
+""".trim()
+
+    private fun runLoop(t: Task, key: String) {
+        val p = prefs()
+        val model = p.getString("model", "")!!.trim().ifEmpty { "gemini-2.5-flash" }
+        var step = 0L
+        var screen = AgentAccessibilityService.instance != null
+
+        while (step < MAX_STEPS && !t.cancelled) {
+            step++
+            express(t, Expr(Mood.THINKING))
+            trimHistory(t.history)
+
+            val resp = callGemini(t, key, model, screen)
+            val candidates = resp.optJSONArray("candidates")
+            if (candidates == null || candidates.length() == 0) {
+                emit(t.id, "⚠ empty model response")
+                t.state = "error"
+                express(t, Expr(Mood.ERROR, "empty response"))
+                return
+            }
+            val content = candidates.getJSONObject(0).optJSONObject("content") ?: JSONObject()
+            val parts = content.optJSONArray("parts") ?: JSONArray()
+
+            // collect function calls
+            val calls = ArrayList<JSONObject>()
+            var textOut = ""
+            for (i in 0 until parts.length()) {
+                val pt = parts.getJSONObject(i)
+                pt.optJSONObject("functionCall")?.let { calls.add(it) }
+                if (pt.has("text")) textOut += pt.optString("text")
+            }
+
+            // append model turn to history
+            t.history.put(JSONObject().put("role", "model").put("parts", parts))
+
+            if (calls.isEmpty()) {
+                // final answer
+                val reply = textOut.ifBlank { "(done)" }
+                emit(t.id, "🤖 $reply")
+                express(t, Expr(Mood.REPORT, reply.take(80)))
+                if (p.getBoolean("speak", false) && !t.quiet) Voice.say(app, reply)
+                t.state = "done"
+                t.postId?.let { Posts.markDone(app, it) }
+                return
+            }
+
+            // execute tools
+            val results = JSONArray()
+            for (fc in calls) {
+                if (t.cancelled) break
+                val name = fc.optString("name")
+                val args = fc.optJSONObject("args") ?: JSONObject()
+                val needsScreen = name in UI_TOOLS || name == "screenshot"
+                if (needsScreen) {
+                    t.state = "needs screen"
+                    notifyState()
+                    if (!ScreenLease.acquire(t, 60_000)) {
+                        results.put(JSONObject().put("functionResponse", JSONObject()
+                            .put("name", name)
+                            .put("response", JSONObject().put("result", "ERROR: could not acquire screen"))))
+                        continue
+                    }
+                    t.state = "working"
+                    notifyState()
+                    screen = true
+                }
+                express(t, toolExpr(name, args))
+                emit(t.id, "→ $name ${args.toString().take(120)}")
+                val out = try {
+                    Tools.run(app, name, args, screen)
+                } catch (e: Exception) {
+                    "ERROR: ${e.message}"
+                }
+                emit(t.id, "← ${out.take(300)}")
+                results.put(JSONObject().put("functionResponse", JSONObject()
+                    .put("name", name)
+                    .put("response", JSONObject().put("result", out.take(8000)))))
+            }
+            // append tool results as user turn (Gemini function-calling convention)
+            t.history.put(JSONObject().put("role", "user").put("parts", results))
+        }
+        if (!t.cancelled) {
+            emit(t.id, "⚠ step limit")
+            t.state = "error"
+            express(t, Expr(Mood.ERROR, "step limit"))
+        }
+    }
+
+    private fun toolExpr(name: String, a: JSONObject): Expr = when (name) {
+        "screen_read" -> Expr(Mood.READING, "reading screen")
+        "tap_text", "tap_xy", "type_text", "scroll", "press" -> Expr(Mood.ACTING, name)
+        "speak" -> Expr(Mood.SPEAKING, a.optString("text").take(40))
+        "analyze_upload", "web_fetch", "list_uploads" -> Expr(Mood.READING, name)
+        "screenshot" -> Expr(Mood.ACTING, "screenshot")
+        else -> Expr(Mood.ACTING, name)
+    }
+
+    private fun trimHistory(history: JSONArray) {
+        // keep system-ish early context + recent turns; drop middle if too long
+        while (history.length() > 40) {
+            var cut = 0
+            for (i in 1 until history.length()) {
+                val m = history.optJSONObject(i) ?: continue
+                val first = m.optJSONArray("parts")?.optJSONObject(0)
+                if (m.optString("role") == "user" && first != null && first.has("text")) { cut = i; break }
+            }
+            if (cut > 0) {
+                for (k in 0 until cut) history.remove(0)
+            } else if (history.length() > 80) {
+                history.remove(1); history.remove(1) // drop oldest call/response pair
+            } else break
+        }
+    }
+
+    private fun callGemini(t: Task, key: String, model: String, screen: Boolean): JSONObject {
         val body = JSONObject()
-            .put("contents", JSONArray().put(JSONObject()
-                .put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
-            .toString()
-        val c = url.openConnection() as HttpURLConnection
-        c.requestMethod = "POST"
-        c.doOutput = true
-        c.setRequestProperty("Content-Type", "application/json")
-        c.connectTimeout = 30000
-        c.readTimeout = 60000
-        c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        val code = c.responseCode
-        val stream = if (code in 200..299) c.inputStream else c.errorStream
-        val resp = stream.bufferedReader().readText()
-        if (code !in 200..299) throw RuntimeException("Gemini HTTP $code: ${resp.take(200)}")
-        val o = JSONObject(resp)
-        val candidates = o.optJSONArray("candidates") ?: throw RuntimeException("No candidates")
-        val content = candidates.getJSONObject(0).optJSONObject("content")
-        val parts = content?.optJSONArray("parts") ?: throw RuntimeException("No parts")
-        return parts.getJSONObject(0).optString("text", "(empty)")
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", SYSTEM))))
+            .put("contents", t.history)
+            .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", Tools.declarations(screen))))
+            .toString().toByteArray()
+        var got = false
+        while (!got) {
+            if (t.cancelled) throw RuntimeException("cancelled")
+            got = modelCalls.tryAcquire(500, TimeUnit.MILLISECONDS)
+        }
+        try {
+            var lastErr = "unknown error"
+            for (attempt in 0 until 4) {
+                if (t.cancelled) throw RuntimeException("cancelled")
+                try {
+                    val c = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+                        .openConnection() as HttpURLConnection
+                    c.requestMethod = "POST"
+                    c.doOutput = true
+                    c.connectTimeout = 30000
+                    c.readTimeout = 120000
+                    c.setRequestProperty("Content-Type", "application/json")
+                    c.setRequestProperty("x-goog-api-key", key)
+                    c.outputStream.use { it.write(body) }
+                    val code = c.responseCode
+                    val stream = if (code in 200..299) c.inputStream else c.errorStream
+                    val text = stream.bufferedReader().use { it.readText() }
+                    if (code in 200..299) return JSONObject(text)
+                    lastErr = "HTTP $code: ${text.take(300)}"
+                    if (code !in intArrayOf(429, 500, 503)) break
+                } catch (e: java.io.IOException) {
+                    lastErr = e.message ?: "network error"
+                }
+                Thread.sleep(2000L * (attempt + 1))
+            }
+            throw RuntimeException(lastErr)
+        } finally {
+            modelCalls.release()
+        }
     }
 }
+
+data class PcApproval(val id: String, val title: String, val detail: String)
