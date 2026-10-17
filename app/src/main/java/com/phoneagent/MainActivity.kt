@@ -61,6 +61,7 @@ class MainActivity : Activity() {
     private lateinit var aliveChip: TextView
     private var runOnPc = false
     private lateinit var pcChip: TextView
+    private lateinit var speakChip: TextView
     private val shownApprovals = HashSet<String>()
     private var inboxOpen = false
     private var targetId: Int? = null
@@ -372,6 +373,15 @@ class MainActivity : Activity() {
         socialRow.addView(digestChip, lp(WRAP, WRAP, r = 8))
         socialRow.addView(quickChip, lp(WRAP, WRAP, r = 8))
         socialRow.addView(aliveChip, lp(WRAP, WRAP, r = 8))
+        speakChip = chip("Speak")
+        styleChip(speakChip, p.getBoolean("speak", true))
+        speakChip.setOnClickListener {
+            val on = !prefs().getBoolean("speak", true)
+            prefs().edit().putBoolean("speak", on).apply()
+            styleChip(speakChip, on)
+            Toast.makeText(this, if (on) "Speaking enabled" else "Muted — no audio", Toast.LENGTH_SHORT).show()
+        }
+        socialRow.addView(speakChip, lp(WRAP, WRAP, r = 8))
         pcChip = chip("Pair PC")
         pcChip.setOnClickListener { pcMenu() }
         socialRow.addView(pcChip, lp(WRAP, WRAP))
@@ -438,11 +448,12 @@ class MainActivity : Activity() {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, 0)
         }
         bar.addView(mic, lp(dp(40), dp(40), r = 8))
         bar.addView(input, lp(0, WRAP, 1f, r = 8))
         bar.addView(send, lp(dp(40), dp(40)))
-        root.addView(bar, lp(MATCH, WRAP, t = 8))
+        root.addView(bar)
 
         setContentView(root)
 
@@ -515,48 +526,52 @@ class MainActivity : Activity() {
             .setView(field)
             .setPositiveButton("Pair") { _, _ ->
                 val link = field.text.toString().trim()
-                if (link.isBlank()) return@setPositiveButton
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).setPackage(packageName))
+                if (link.isEmpty()) return@setPositiveButton
+                try {
+                    Pc.pair(this, link)
+                    Toast.makeText(this, "Paired", Toast.LENGTH_SHORT).show()
+                    refreshPcChip()
+                    Pc.startPolling(applicationContext)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Pair failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
     private fun showPostQueue() {
-        val arr = Posts.all(this)
-        if (arr.length() == 0) {
+        val posts = Posts.list(this)
+        if (posts.isEmpty()) {
             AlertDialog.Builder(this)
                 .setTitle("Post queue")
-                .setMessage("No scheduled posts.\n\nAsk Iris to schedule one after you approve the exact text, platform and time.")
+                .setMessage("No scheduled posts. Ask Iris to schedule one (it will confirm text, platform and time first).")
                 .setPositiveButton("OK", null)
                 .show()
             return
         }
-        val labels = ArrayList<CharSequence>()
-        val ids = ArrayList<String>()
-        for (i in 0 until arr.length()) {
-            val o = arr.getJSONObject(i)
-            val id = o.optString("id")
-            val at = o.optLong("at", o.optLong("when", 0L))
-            val st = o.optString("status")
-            val plat = Posts.name(o.optString("platform"))
-            val preview = o.optString("text").take(40).replace("\n", " ")
-            labels.add("[$st] $plat · ${Posts.formatWhen(at)}\n$preview")
-            ids.add(id)
+        val items = posts.map { p ->
+            val st = p.optString("status")
+            val whenStr = try {
+                val at = p.optLong("at")
+                if (at > 0) java.text.SimpleDateFormat("MMM d HH:mm", java.util.Locale.getDefault()).format(java.util.Date(at))
+                else "?"
+            } catch (_: Exception) { "?" }
+            "${Posts.name(p.optString("platform"))}  $whenStr  [$st]\n${p.optString("text").take(60)}"
         }
         AlertDialog.Builder(this)
-            .setTitle("Post queue (${arr.length()})")
-            .setItems(labels.toTypedArray()) { _, which ->
-                val id = ids[which]
+            .setTitle("Post queue (${posts.size})")
+            .setItems(items.toTypedArray()) { _, i ->
+                val p = posts[i]
+                val id = p.optString("id")
                 AlertDialog.Builder(this)
-                    .setTitle("Post $id")
-                    .setMessage(labels[which])
+                    .setTitle("Cancel this post?")
+                    .setMessage(p.optString("text").take(200))
                     .setPositiveButton("Cancel post") { _, _ ->
-                        if (Posts.cancel(this, id)) {
-                            Toast.makeText(this, "Cancelled $id", Toast.LENGTH_SHORT).show()
-                        }
+                        Posts.cancel(this, id)
+                        Toast.makeText(this, "Cancelled", Toast.LENGTH_SHORT).show()
                     }
-                    .setNegativeButton("Close", null)
+                    .setNegativeButton("Keep", null)
                     .show()
             }
             .setNegativeButton("Close", null)
@@ -567,56 +582,49 @@ class MainActivity : Activity() {
         val on = prefs().getBoolean("digest_on", false)
         val hour = prefs().getInt("digest_hour", 8)
         val items = arrayOf(
-            if (on) "Turn off daily summary" else "Turn on daily summary",
-            "Run summary now",
-            "Set time (currently ${"%02d".format(hour)}:00)"
+            if (on) "Turn daily summary off" else "Turn daily summary on",
+            "Set hour (currently ${String.format("%02d", hour)}:00)",
+            "Run summary now"
         )
         AlertDialog.Builder(this)
             .setTitle("Daily summary")
-            .setItems(items) { _, which ->
-                when (which) {
+            .setItems(items) { _, i ->
+                when (i) {
                     0 -> {
-                        if (on) {
-                            Posts.clearDigest(this)
-                            styleChip(chip, false)
-                            Toast.makeText(this, "Daily summary off", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Posts.scheduleDigest(this, hour.coerceIn(0, 23))
-                            styleChip(chip, true)
-                            Toast.makeText(this, "Daily summary at ${"%02d".format(hour)}:00", Toast.LENGTH_SHORT).show()
-                        }
+                        val next = !on
+                        prefs().edit().putBoolean("digest_on", next).apply()
+                        styleChip(chip, next)
+                        if (next) Posts.armDigest(this) else Posts.clearDigest(this)
+                        Toast.makeText(this, if (next) "Daily summary on" else "Daily summary off", Toast.LENGTH_SHORT).show()
                     }
                     1 -> {
-                        AgentEngine.runDigest()
-                        Toast.makeText(this, "Running daily summary…", Toast.LENGTH_SHORT).show()
-                        refreshTasks()
-                    }
-                    2 -> {
-                        val hours = (0..23).map { "%02d:00".format(it) }.toTypedArray()
+                        val hours = (0..23).map { String.format("%02d:00", it) }.toTypedArray()
                         AlertDialog.Builder(this)
                             .setTitle("Digest hour")
                             .setItems(hours) { _, h ->
-                                Posts.scheduleDigest(this, h)
-                                styleChip(chip, true)
-                                Toast.makeText(this, "Daily summary at ${"%02d".format(h)}:00", Toast.LENGTH_SHORT).show()
+                                prefs().edit().putInt("digest_hour", h).apply()
+                                if (prefs().getBoolean("digest_on", false)) Posts.armDigest(this)
+                                Toast.makeText(this, "Digest at ${String.format("%02d", h)}:00", Toast.LENGTH_SHORT).show()
                             }
-                            .setNegativeButton("Cancel", null)
                             .show()
+                    }
+                    2 -> {
+                        AgentEngine.runDigest()
+                        Toast.makeText(this, "Running daily summary…", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
-            .setNegativeButton("Close", null)
             .show()
     }
 
     private fun showNextApproval() {
-        val next = AgentEngine.approvals.firstOrNull { it.id !in shownApprovals } ?: return
-        shownApprovals.add(next.id)
+        val a = AgentEngine.approvals.firstOrNull { it.id !in shownApprovals } ?: return
+        shownApprovals.add(a.id)
         AlertDialog.Builder(this)
-            .setTitle("PC asks: ${next.kind}")
-            .setMessage(next.text.take(800))
-            .setPositiveButton("Allow") { _, _ -> AgentEngine.answerApproval(next, true) }
-            .setNegativeButton("Deny") { _, _ -> AgentEngine.answerApproval(next, false) }
+            .setTitle("Approve? ${a.kind}")
+            .setMessage(a.text.take(500))
+            .setPositiveButton("Allow") { _, _ -> AgentEngine.answerApproval(a, true) }
+            .setNegativeButton("Deny") { _, _ -> AgentEngine.answerApproval(a, false) }
             .setOnDismissListener { showNextApproval() }
             .show()
     }
@@ -672,6 +680,7 @@ class MainActivity : Activity() {
         }
         if (quick) AgentAccessibilityService.instance?.let { Quick.enable(it, true) }
         refreshAlive()
+        if (::speakChip.isInitialized) styleChip(speakChip, sp.getBoolean("speak", true))
         refreshTasks()
         if (Pc.devices(this).isNotEmpty()) Pc.startPolling(applicationContext)
         checkInbox()
