@@ -18,6 +18,9 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 object Tools {
     private const val S = "STRING"
@@ -53,6 +56,8 @@ object Tools {
         T("analyze_upload", "Analyse an uploaded image or text document by id (from list_uploads). For images, describe content and answer the question. For text files, extract or summarise.", mapOf("id" to S, "question" to S), setOf("question")),
         T("delete_upload", "Remove an upload by id.", mapOf("id" to S)),
         T("screenshot", "Capture the current screen into the upload library (needs Accessibility on API 30+). Returns the new upload id.", screen = true),
+        T("now", "Current local date, time and weekday."),
+        T("schedule_post", "Schedule a post for later. platform: instagram, x, telegram or whatsapp. time: local yyyy-MM-dd HH:mm. Only call after the user approved the exact text.", mapOf("platform" to S, "time" to S, "text" to S, "media" to S), setOf("media")),
         T("list_notifications", "Recent notifications. app and hours are optional filters.", mapOf("app" to S, "hours" to N), setOf("app", "hours")),
         T("reply_notification", "Send an inline reply to a notification by its ref. Only after the user approved the exact reply text.", mapOf("ref" to S, "text" to S)),
         T("screen_read", "List visible UI elements with text, flags and tap coordinates.", screen = true),
@@ -217,8 +222,16 @@ object Tools {
                     val id = svc.captureToLibrary(ctx)
                     if (id.startsWith("ERROR")) id else "saved screenshot as upload id=$id"
                 }
-                "list_notifications" -> "(notification access not fully wired in this build)"
-                "reply_notification" -> "ERROR: reply requires notification listener service"
+                "now" -> SimpleDateFormat("yyyy-MM-dd HH:mm (EEEE), zzzz", Locale.US).format(Date())
+                "schedule_post" -> Posts.schedule(ctx, args.getString("platform"), args.getString("time"), args.getString("text"), args.optString("media", ""))
+                "list_notifications" -> {
+                    try { NotifLog.read(ctx, args.optString("app", ""), args.optInt("hours", 24)) }
+                    catch (_: Exception) { "(notification access not fully wired — enable notification access)" }
+                }
+                "reply_notification" -> {
+                    try { NotifLog.reply(ctx, args.getString("ref"), args.getString("text")) }
+                    catch (_: Exception) { "ERROR: reply requires notification listener service" }
+                }
                 "screen_read" -> {
                     val svc = AgentAccessibilityService.instance ?: return NOSVC
                     svc.readScreen()
