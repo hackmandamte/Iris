@@ -93,13 +93,12 @@ object AgentEngine {
     val running: Boolean get() = tasks.any { it.active }
     fun task(id: Int): Task? = tasks.firstOrNull { it.id == id }
 
-    private val SYSTEM = """You are Iris, an autonomous agent on the user's Android phone. Other tasks may run at the same time.
+    private val SYSTEM = """You are Iris, an autonomous agent on the user's Android phone.
 Reach the goal by calling tools step by step. Check each result before the next step.
-When screen tools are available: screen_read, then act (tap_text, tap_xy, type_text, scroll, press), then screen_read again. Tap a field before typing.
-Before irreversible or outward-facing actions (send message, post, delete), ask the user for confirmation and wait.
-Uploads: list_uploads, analyze_upload, screenshot; schedule_post with media=upload id after user approves exact text/platform/time.
-Social: call now for the date before scheduling. Never post/reply until the user approved the exact wording, except pre-approved scheduled posts.
-Final answers may be spoken: keep them short and plain."""
+When screen tools are available: screen_read, then act, then screen_read again.
+Before irreversible actions, ask the user for confirmation.
+Use list_uploads, analyze_upload, screenshot, schedule_post (after user approves exact text/platform/time).
+Call now for the date before scheduling. Keep final answers short for TTS."""
 
     private fun prefs() = app.getSharedPreferences("agent", Context.MODE_PRIVATE)
 
@@ -147,6 +146,9 @@ Final answers may be spoken: keep them short and plain."""
         return t.id
     }
 
+    /** Continue an existing task (used by MainActivity reply flow). */
+    fun reply(id: Int, text: String): Int = send(text, id)
+
     fun summarizeScreen() {
         if (!prefs().getBoolean("screen", false)) {
             val t = newTask("Screen summary")
@@ -167,9 +169,12 @@ Final answers may be spoken: keep them short and plain."""
 
     fun runDigest() {
         launch(newTask("Daily summary", quiet = true, notify = "Daily summary", priority = true),
-            "Write my daily notification digest. Call list_notifications or read recent activity, group by app, mention anything that needs a reply, keep under 120 words.",
+            "Write my daily notification digest. Call list_notifications, group by app, mention anything that needs a reply, keep under 120 words.",
             false)
     }
+
+    /** Alias used by older Social/MainActivity code. */
+    fun dailySummary() = runDigest()
 
     fun runScheduledPost(id: String) {
         val post = Posts.get(app, id) ?: return
@@ -276,9 +281,9 @@ Final answers may be spoken: keep them short and plain."""
 
     fun startHandoff(title: String, from: String, entries: List<String>): Int {
         val ctx = entries.takeLast(40).joinToString("\n") { it.take(300) }
-        val prompt = "This task was handed off from $from. Continue it on this phone. Do not repeat finished steps.\nTask: $title\nSo far:\n$ctx\nCarry on."
+        val prompt = "Handed off from $from. Continue on this phone.\nTask: $title\nSo far:\n$ctx"
         val t = newTask("Handoff: $title")
-        t.display = "Continue handed-off task: $title (from $from)"
+        t.display = "Continue: $title (from $from)"
         launch(t, prompt, false)
         return t.id
     }
@@ -359,7 +364,7 @@ Final answers may be spoken: keep them short and plain."""
                 } else {
                     t.state = "error"
                     emit(t, "⚠ ${e.message}")
-                    express(t, Expr(Mood.ERROR, (e.message ?: "Something went wrong").take(120)))
+                    express(t, Expr(Mood.ERROR, (e.message ?: "error").take(120)))
                 }
             } finally {
                 wl?.let { if (it.isHeld) it.release() }
@@ -378,7 +383,6 @@ Final answers may be spoken: keep them short and plain."""
         "screen_read" -> Expr(Mood.READING, "Reading the screen")
         "web_fetch", "analyze_upload", "list_uploads" -> Expr(Mood.READING, name)
         "speak" -> Expr(Mood.SPEAKING, a.optString("text").take(120))
-        "open_app" -> Expr(Mood.ACTING, "Opening ${a.optString("name")}")
         "schedule_post" -> Expr(Mood.ACTING, "Scheduling post")
         else -> Expr(Mood.ACTING, name.replace('_', ' '))
     }
@@ -435,8 +439,7 @@ Final answers may be spoken: keep them short and plain."""
                 if (t.cancelled) break
                 val name = fc.optString("name")
                 val args = fc.optJSONObject("args") ?: JSONObject()
-                val needsScreen = name in UI_TOOLS
-                if (needsScreen) {
+                if (name in UI_TOOLS) {
                     t.state = "needs screen"
                     changed()
                     if (!ScreenLease.acquire(t, 60_000)) {
@@ -451,11 +454,7 @@ Final answers may be spoken: keep them short and plain."""
                 }
                 express(t, toolExpr(name, args))
                 emit(t, "→ $name ${args.toString().take(120)}")
-                val out = try {
-                    Tools.run(app, name, args, screen)
-                } catch (e: Exception) {
-                    "ERROR: ${e.message}"
-                }
+                val out = try { Tools.run(app, name, args, screen) } catch (e: Exception) { "ERROR: ${e.message}" }
                 emit(t, "← ${out.take(300)}")
                 results.put(JSONObject().put("functionResponse", JSONObject()
                     .put("name", name)
