@@ -98,7 +98,9 @@ Reach the goal by calling tools step by step. Check each result before the next 
 When screen tools are available: screen_read, then act, then screen_read again.
 Before irreversible actions, ask the user for confirmation.
 Use list_uploads, analyze_upload, screenshot, schedule_post (after user approves exact text/platform/time).
-Call now for the date before scheduling. Keep final answers short for TTS."""
+Call now for the date before scheduling.
+Keep final answers short, in plain short paragraphs (no markdown headings, bold, or lists with # or *). Suitable for TTS.
+If the user says mute or unmute, or asks to stop speaking, call set_speak with on=false or on=true."""
 
     private fun prefs() = app.getSharedPreferences("agent", Context.MODE_PRIVATE)
 
@@ -424,7 +426,7 @@ Call now for the date before scheduling. Keep final answers short for TTS."""
             }
             t.history.put(JSONObject().put("role", "model").put("parts", parts))
             if (calls.isEmpty()) {
-                val reply = textOut.ifBlank { "(done)" }
+                val reply = TextPrep.forDisplay(textOut.ifBlank { "(done)" })
                 emit(t, "🤖 $reply")
                 if (p.getBoolean("speak", true) && !t.quiet) {
                     express(t, Expr(Mood.SPEAKING, reply.take(80)))
