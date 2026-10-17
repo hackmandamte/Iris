@@ -40,7 +40,8 @@ object Tools {
         T("open_url", "Open a URL in the browser.", mapOf("url" to S)),
         T("web_fetch", "Fetch a web page as plain text.", mapOf("url" to S)),
         T("notify", "Show a notification.", mapOf("title" to S, "text" to S)),
-        T("speak", "Speak text aloud.", mapOf("text" to S)),
+        T("speak", "Speak text aloud (respects mute).", mapOf("text" to S)),
+        T("set_speak", "Turn spoken replies on or off (mute reporting). on=true enables TTS, on=false mutes audio while everything else continues.", mapOf("on" to B)),
         T("battery", "Battery level and charging state."),
         T("clipboard_get", "Read the clipboard (Android may block this in background)."),
         T("clipboard_set", "Copy text to the clipboard.", mapOf("text" to S)),
@@ -131,8 +132,17 @@ object Tools {
                     "ok"
                 }
                 "speak" -> {
-                    Voice.say(ctx, args.getString("text"))
-                    "speaking"
+                    val speakOn = ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).getBoolean("speak", true)
+                    if (!speakOn) "muted (speak is off)"
+                    else {
+                        Voice.say(ctx, args.getString("text"))
+                        "speaking"
+                    }
+                }
+                "set_speak" -> {
+                    val on = args.getBoolean("on")
+                    ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).edit().putBoolean("speak", on).apply()
+                    if (on) "speaking enabled" else "muted — no audio, all other functions still work"
                 }
                 "battery" -> {
                     val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
