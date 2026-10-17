@@ -18,8 +18,12 @@ object Posts {
     fun all(ctx: Context) = JSONArray(sp(ctx).getString("list", "[]"))
     private fun save(ctx: Context, a: JSONArray) { sp(ctx).edit().putString("list", a.toString()).apply() }
 
-    fun name(p: String) = when (p) {
-        "x" -> "X"; "instagram" -> "Instagram"; "telegram" -> "Telegram"; "whatsapp" -> "WhatsApp"; else -> p
+    fun name(p: String) = when (p.lowercase(Locale.US)) {
+        "x", "twitter" -> "X"
+        "instagram", "ig" -> "Instagram"
+        "telegram", "tg" -> "Telegram"
+        "whatsapp", "wa" -> "WhatsApp"
+        else -> p
     }
 
     @Synchronized fun get(ctx: Context, id: String): JSONObject? {
@@ -48,61 +52,123 @@ object Posts {
         if (found) {
             save(ctx, next)
             val am = ctx.getSystemService(AlarmManager::class.java)
-            val pi = PendingIntent.getBroadcast(ctx, id.hashCode(),
+            val pi = PendingIntent.getBroadcast(
+                ctx, id.hashCode(),
                 Intent(ctx, AlarmReceiver::class.java).setAction("POST").putExtra("id", id),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
             am.cancel(pi)
         }
         return found
     }
 
-    @Synchronized fun enqueue(ctx: Context, platform: String, text: String, whenMs: Long): String {
+    /**
+     * Tool entry point used by Tools.schedule_post.
+     * time: local "yyyy-MM-dd HH:mm"
+     * Returns a short human status string (or ERROR: ...).
+     */
+    @Synchronized fun schedule(
+        ctx: Context,
+        platform: String,
+        time: String,
+        text: String,
+        media: String = ""
+    ): String {
+        val plat = platform.trim().lowercase(Locale.US)
+        if (plat !in setOf("x", "twitter", "instagram", "ig", "telegram", "tg", "whatsapp", "wa")) {
+            return "ERROR: platform must be x, instagram, telegram or whatsapp"
+        }
+        if (text.isBlank()) return "ERROR: post text is empty"
+        val whenMs = try {
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).parse(time.trim())!!.time
+        } catch (_: Exception) {
+            return "ERROR: time must be yyyy-MM-dd HH:mm (local)"
+        }
+        if (whenMs < System.currentTimeMillis() - 30_000L) {
+            return "ERROR: time is in the past"
+        }
         val id = UUID.randomUUID().toString().take(8)
         val a = all(ctx)
-        a.put(JSONObject()
-            .put("id", id)
-            .put("platform", platform)
-            .put("text", text)
-            .put("when", whenMs)
-            .put("status", "queued"))
+        a.put(
+            JSONObject()
+                .put("id", id)
+                .put("platform", plat)
+                .put("text", text)
+                .put("at", whenMs)
+                .put("when", whenMs) // legacy alias
+                .put("status", "scheduled")
+                .put("media", media)
+        )
         save(ctx, a)
-        schedule(ctx, id, whenMs)
-        return id
+        armPost(ctx, id, whenMs)
+        return "scheduled #$id on ${name(plat)} at ${formatWhen(whenMs)}"
     }
 
-    fun schedule(ctx: Context, id: String, whenMs: Long) {
+    /** Low-level alarm arm for an existing post id. */
+    fun armPost(ctx: Context, id: String, whenMs: Long) {
         val am = ctx.getSystemService(AlarmManager::class.java)
-        val pi = PendingIntent.getBroadcast(ctx, id.hashCode(),
+        val pi = PendingIntent.getBroadcast(
+            ctx, id.hashCode(),
             Intent(ctx, AlarmReceiver::class.java).setAction("POST").putExtra("id", id),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, whenMs, pi)
     }
+
+    /** @deprecated use armPost — kept so older call sites compile */
+    fun schedule(ctx: Context, id: String, whenMs: Long) = armPost(ctx, id, whenMs)
 
     fun rearmAll(ctx: Context) {
         val a = all(ctx)
         val now = System.currentTimeMillis()
         for (i in 0 until a.length()) {
             val o = a.getJSONObject(i)
-            if (o.optString("status") == "queued" && o.optLong("when") > now)
-                schedule(ctx, o.optString("id"), o.optLong("when"))
+            val st = o.optString("status")
+            val at = o.optLong("at", o.optLong("when", 0L))
+            if (st in setOf("scheduled", "queued") && at > now) armPost(ctx, o.optString("id"), at)
         }
+        armDigest(ctx)
+    }
+
+    /** Re-arm the daily digest alarm from the stored hour (or no-op if unset). */
+    fun armDigest(ctx: Context) {
         val hour = ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).getInt("digest_hour", -1)
-        if (hour >= 0) scheduleDigest(ctx, hour)
+        if (hour in 0..23) scheduleDigest(ctx, hour)
     }
 
     fun scheduleDigest(ctx: Context, hour: Int) {
-        ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).edit().putInt("digest_hour", hour).apply()
+        ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).edit()
+            .putInt("digest_hour", hour)
+            .putBoolean("digest_on", true)
+            .apply()
         val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, hour)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
             if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
         }
         val am = ctx.getSystemService(AlarmManager::class.java)
-        val pi = PendingIntent.getBroadcast(ctx, 99001,
+        val pi = PendingIntent.getBroadcast(
+            ctx, 99001,
             Intent(ctx, AlarmReceiver::class.java).setAction("DIGEST"),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi)
+    }
+
+    fun clearDigest(ctx: Context) {
+        ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).edit()
+            .putBoolean("digest_on", false)
+            .putInt("digest_hour", -1)
+            .apply()
+        val am = ctx.getSystemService(AlarmManager::class.java)
+        val pi = PendingIntent.getBroadcast(
+            ctx, 99001,
+            Intent(ctx, AlarmReceiver::class.java).setAction("DIGEST"),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        am.cancel(pi)
     }
 
     fun formatWhen(ms: Long): String =
