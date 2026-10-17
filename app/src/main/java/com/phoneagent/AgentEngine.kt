@@ -485,6 +485,22 @@ If the user says mute or unmute, or asks to stop speaking, call set_speak with o
         }
     }
 
+    /** Preferred model first, then known-good Gemini fallbacks (skip duplicates). */
+    private fun modelChain(preferred: String): List<String> {
+        val fallbacks = listOf(
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro"
+        )
+        val out = ArrayList<String>()
+        val p = preferred.trim()
+        if (p.isNotEmpty()) out.add(p)
+        for (m in fallbacks) if (m !in out) out.add(m)
+        return out
+    }
+
     private fun callGemini(t: Task, key: String, model: String, screen: Boolean): JSONObject {
         val body = JSONObject()
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", SYSTEM))))
@@ -498,28 +514,40 @@ If the user says mute or unmute, or asks to stop speaking, call set_speak with o
         }
         try {
             var lastErr = "unknown error"
-            for (attempt in 0 until 4) {
+            val models = modelChain(model)
+            for ((mi, m) in models.withIndex()) {
                 if (t.cancelled) throw RuntimeException("cancelled")
-                try {
-                    val c = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
-                        .openConnection() as HttpURLConnection
-                    c.requestMethod = "POST"
-                    c.doOutput = true
-                    c.connectTimeout = 30000
-                    c.readTimeout = 120000
-                    c.setRequestProperty("Content-Type", "application/json")
-                    c.setRequestProperty("x-goog-api-key", key)
-                    c.outputStream.use { it.write(body) }
-                    val code = c.responseCode
-                    val stream = if (code in 200..299) c.inputStream else c.errorStream
-                    val text = stream.bufferedReader().use { it.readText() }
-                    if (code in 200..299) return JSONObject(text)
-                    lastErr = "HTTP $code: ${text.take(300)}"
-                    if (code !in intArrayOf(429, 500, 503)) break
-                } catch (e: java.io.IOException) {
-                    lastErr = e.message ?: "network error"
+                // Fewer retries on later fallback models to keep total latency bounded
+                val maxAttempts = if (mi == 0) 3 else 2
+                for (attempt in 0 until maxAttempts) {
+                    if (t.cancelled) throw RuntimeException("cancelled")
+                    try {
+                        val c = URL("https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent")
+                            .openConnection() as HttpURLConnection
+                        c.requestMethod = "POST"
+                        c.doOutput = true
+                        c.connectTimeout = 30000
+                        c.readTimeout = 120000
+                        c.setRequestProperty("Content-Type", "application/json")
+                        c.setRequestProperty("x-goog-api-key", key)
+                        c.outputStream.use { it.write(body) }
+                        val code = c.responseCode
+                        val stream = if (code in 200..299) c.inputStream else c.errorStream
+                        val text = stream.bufferedReader().use { it.readText() }
+                        if (code in 200..299) {
+                            if (mi > 0) emit(t, "↻ fallback model: $m")
+                            return JSONObject(text)
+                        }
+                        lastErr = "HTTP $code ($m): ${text.take(240)}"
+                        // 400 / 404 → model unavailable or bad request; try next model
+                        if (code in intArrayOf(400, 404)) break
+                        // 429 / 500 / 503 → retry then fallback
+                        if (code !in intArrayOf(429, 500, 503)) break
+                    } catch (e: java.io.IOException) {
+                        lastErr = "${e.message ?: "network error"} ($m)"
+                    }
+                    Thread.sleep(1500L * (attempt + 1))
                 }
-                Thread.sleep(2000L * (attempt + 1))
             }
             throw RuntimeException(lastErr)
         } finally {
