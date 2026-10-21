@@ -47,9 +47,9 @@ class MainActivity : Activity() {
     private var LINE = 0xFFE5E5EA.toInt()
     private var SURFACE = 0xFFF5F0F7.toInt()
     private var BG = 0xFFFAF7F5.toInt()
-    private var USER_BUBBLE = 0xFFFFE8D6.toInt()  // soft peach
+    private var USER_BUBBLE = 0xFFFFE8D6.toInt()
     private var USER_INK = 0xFF4A3428.toInt()
-    private var AGENT_BUBBLE = 0xFFE8E4F5.toInt()  // soft lavender-blue
+    private var AGENT_BUBBLE = 0xFFE8E4F5.toInt()
     private var AGENT_INK = 0xFF2A2640.toInt()
     private var GOLD = 0xFFC9A227.toInt()
     private var GOLD_SOFT = 0xFFF5E6B8.toInt()
@@ -612,7 +612,7 @@ class MainActivity : Activity() {
         if (s.startsWith("→ ")) {
             finishStep(id)
             val txt = s.substring(2)
-            val tv = TextView((this).apply {
+            val tv = TextView(this).apply {
                 text = "… $txt"
                 textSize = 12f
                 typeface = Typeface.MONOSPACE
