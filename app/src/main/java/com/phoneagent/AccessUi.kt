@@ -16,7 +16,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 
-/** Side bubble + quick menu opened by volume chord or the bubble itself. */
+/** Side bubble + quick menu. Actions stay in overlay — only "Open Iris" launches the app. */
 object Quick {
     private var host: Context? = null
     private var accessibilityHost = false
@@ -96,7 +96,6 @@ object Quick {
                     MotionEvent.ACTION_UP -> {
                         if (!moved) showMenu(ctx)
                         else {
-                            // snap to edge
                             val sw = ctx.resources.displayMetrics.widthPixels
                             lp.x = if (lp.x + size / 2 < sw / 2) 0 else sw - size
                             w.updateViewLayout(view, lp)
@@ -135,14 +134,12 @@ object Quick {
                 setOnClickListener { hideMenu(); action() }
             })
         }
-        addBtn("Speak") {
-            // voice entry – open main and rely on mic, or toast
-            Toast.makeText(ctx, "Open Iris and tap the mic", Toast.LENGTH_SHORT).show()
-            ctx.startActivity(android.content.Intent(ctx, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-        }
         addBtn("Type") {
-            // simple prompt
-            val et = EditText(ctx).apply { hint = "Task for Iris"; setTextColor(Color.WHITE); setHintTextColor(0x99FFFFFF.toInt()) }
+            val et = EditText(ctx).apply {
+                hint = "Message Iris"
+                setTextColor(Color.WHITE)
+                setHintTextColor(0x99FFFFFF.toInt())
+            }
             val dlg = android.app.AlertDialog.Builder(ctx, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Iris")
                 .setView(et)
@@ -153,12 +150,29 @@ object Quick {
                 .setNegativeButton("Cancel", null)
                 .create()
             dlg.window?.setType(type())
-            try { dlg.show() } catch (e: Exception) {
-                ctx.startActivity(android.content.Intent(ctx, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            try {
+                dlg.show()
+            } catch (e: Exception) {
+                Toast.makeText(ctx, "Could not show quick input", Toast.LENGTH_SHORT).show()
             }
         }
-        addBtn("Tasks") {
-            ctx.startActivity(android.content.Intent(ctx, MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        addBtn("Summarize screen") { AgentEngine.summarizeScreen() }
+        val speakOn = ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).getBoolean("speak", true)
+        addBtn(if (speakOn) "Mute" else "Unmute") {
+            val p = ctx.getSharedPreferences("agent", Context.MODE_PRIVATE)
+            val next = !p.getBoolean("speak", true)
+            p.edit().putBoolean("speak", next).apply()
+            if (!next) Voice.stop()
+            Toast.makeText(ctx, if (next) "Speak on" else "Muted", Toast.LENGTH_SHORT).show()
+        }
+        if (AgentEngine.running) {
+            addBtn("Stop all") { AgentEngine.stopAll() }
+        }
+        addBtn("Open Iris") {
+            ctx.startActivity(
+                android.content.Intent(ctx, MainActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
         }
         val lp = WindowManager.LayoutParams(
             dp(ctx, 280), WindowManager.LayoutParams.WRAP_CONTENT, type(),
