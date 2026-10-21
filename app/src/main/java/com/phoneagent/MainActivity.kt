@@ -28,9 +28,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
-/**
- * Grok-like chat shell with connected apps list in Settings.
- */
+/** Grok-like chat shell with multi-provider LLM settings. */
 class MainActivity : Activity() {
     companion object {
         private const val REQ_VOICE = 42
@@ -120,43 +118,19 @@ class MainActivity : Activity() {
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         dark = night
         if (night) {
-            ACCENT = 0xFF8BA3FF.toInt()
-            INK = 0xFFF2F0F5.toInt()
-            MUTED = 0xFFA09AAB.toInt()
-            LINE = 0xFF3A3548.toInt()
-            SURFACE = 0xFF2A2638.toInt()
-            BG = 0xFF16141F.toInt()
-            USER_BUBBLE = 0xFF4A3A32.toInt()
-            USER_INK = 0xFFFFE8D6.toInt()
-            AGENT_BUBBLE = 0xFF2E2A42.toInt()
-            AGENT_INK = 0xFFE4E0F5.toInt()
-            GOLD = 0xFFE0C35A.toInt()
-            GOLD_SOFT = 0xFF3D3520.toInt()
-            RED = 0xFFFF6B6B.toInt()
-            RED_BG = 0xFF3D2020.toInt()
-            PALETTE = intArrayOf(
-                0xFF8BA3FF.toInt(), 0xFFB794FF.toInt(), 0xFFE8A87C.toInt(),
-                0xFFE0C35A.toInt(), 0xFF9BB0FF.toInt(), 0xFFE8A0B0.toInt()
-            )
+            ACCENT = 0xFF8BA3FF.toInt(); INK = 0xFFF2F0F5.toInt(); MUTED = 0xFFA09AAB.toInt()
+            LINE = 0xFF3A3548.toInt(); SURFACE = 0xFF2A2638.toInt(); BG = 0xFF16141F.toInt()
+            USER_BUBBLE = 0xFF4A3A32.toInt(); USER_INK = 0xFFFFE8D6.toInt()
+            AGENT_BUBBLE = 0xFF2E2A42.toInt(); AGENT_INK = 0xFFE4E0F5.toInt()
+            GOLD = 0xFFE0C35A.toInt(); GOLD_SOFT = 0xFF3D3520.toInt()
+            RED = 0xFFFF6B6B.toInt(); RED_BG = 0xFF3D2020.toInt()
         } else {
-            ACCENT = 0xFF5B7CFF.toInt()
-            INK = 0xFF1C1C1E.toInt()
-            MUTED = 0xFF8E8E93.toInt()
-            LINE = 0xFFE8E0EC.toInt()
-            SURFACE = 0xFFF5F0F7.toInt()
-            BG = 0xFFFAF7F5.toInt()
-            USER_BUBBLE = 0xFFFFE8D6.toInt()
-            USER_INK = 0xFF4A3428.toInt()
-            AGENT_BUBBLE = 0xFFE8E4F5.toInt()
-            AGENT_INK = 0xFF2A2640.toInt()
-            GOLD = 0xFFC9A227.toInt()
-            GOLD_SOFT = 0xFFF5E6B8.toInt()
-            RED = 0xFFC62828.toInt()
-            RED_BG = 0xFFFDE8E8.toInt()
-            PALETTE = intArrayOf(
-                0xFF5B7CFF.toInt(), 0xFF9B6DFF.toInt(), 0xFFE8A87C.toInt(),
-                0xFFC9A227.toInt(), 0xFF7B9EFF.toInt(), 0xFFD4849A.toInt()
-            )
+            ACCENT = 0xFF5B7CFF.toInt(); INK = 0xFF1C1C1E.toInt(); MUTED = 0xFF8E8E93.toInt()
+            LINE = 0xFFE8E0EC.toInt(); SURFACE = 0xFFF5F0F7.toInt(); BG = 0xFFFAF7F5.toInt()
+            USER_BUBBLE = 0xFFFFE8D6.toInt(); USER_INK = 0xFF4A3428.toInt()
+            AGENT_BUBBLE = 0xFFE8E4F5.toInt(); AGENT_INK = 0xFF2A2640.toInt()
+            GOLD = 0xFFC9A227.toInt(); GOLD_SOFT = 0xFFF5E6B8.toInt()
+            RED = 0xFFC62828.toInt(); RED_BG = 0xFFFDE8E8.toInt()
         }
     }
 
@@ -168,28 +142,16 @@ class MainActivity : Activity() {
         } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
-
         val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(BG)
+            orientation = LinearLayout.VERTICAL; setBackgroundColor(BG)
             setPadding(dp(14), dp(14), dp(14), dp(10))
         }
-
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         header.addView(TextView(this).apply {
-            text = getString(R.string.app_name)
-            textSize = 20f
-            setTextColor(INK)
-            setTypeface(null, Typeface.BOLD)
+            text = getString(R.string.app_name); textSize = 20f; setTextColor(INK); setTypeface(null, Typeface.BOLD)
         }, lp(0, WRAP, 1f))
         status = TextView(this).apply {
-            text = "Ready"
-            textSize = 13f
-            setTextColor(MUTED)
-            setPadding(dp(8), dp(4), dp(8), dp(4))
+            text = "Ready"; textSize = 13f; setTextColor(MUTED); setPadding(dp(8), dp(4), dp(8), dp(4))
             setOnClickListener {
                 if (AgentEngine.running) {
                     AgentEngine.stopAll()
@@ -199,89 +161,64 @@ class MainActivity : Activity() {
         }
         header.addView(status, lp(WRAP, WRAP, r = 8))
         header.addView(TextView(this).apply {
-            text = "⚙"
-            textSize = 20f
-            setTextColor(MUTED)
-            setPadding(dp(8), dp(4), dp(4), dp(4))
+            text = "⚙"; textSize = 20f; setTextColor(MUTED); setPadding(dp(8), dp(4), dp(4), dp(4))
             setOnClickListener { toggleSettings() }
         })
         root.addView(header)
-
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply { addView(chat) }
         root.addView(scroll, lp(MATCH, 0, 1f, t = 8))
-
         settingsPanel = buildSettingsPanel()
         settingsPanel.visibility = View.GONE
         root.addView(settingsPanel, lp(MATCH, 0, 1f, t = 8))
-
-        composeBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        composeBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val attach = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_upload)
-            setColorFilter(ACCENT)
-            background = shape(SURFACE, 20, LINE)
-            contentDescription = "Attach"
+            setImageResource(android.R.drawable.ic_menu_upload); setColorFilter(ACCENT)
+            background = shape(SURFACE, 20, LINE); contentDescription = "Attach"
             setOnClickListener { pickFile() }
         }
         input = EditText(this).apply {
-            hint = "Message Iris"
-            textSize = 15f
-            setTextColor(INK)
-            setHintTextColor(MUTED)
-            background = shape(SURFACE, 22)
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            maxLines = 5
+            hint = "Message Iris"; textSize = 15f; setTextColor(INK); setHintTextColor(MUTED)
+            background = shape(SURFACE, 22); setPadding(dp(14), dp(12), dp(14), dp(12)); maxLines = 5
         }
         val mic = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_btn_speak_now)
-            setColorFilter(ACCENT)
-            background = shape(SURFACE, 20, LINE)
-            contentDescription = "Voice"
+            setImageResource(android.R.drawable.ic_btn_speak_now); setColorFilter(ACCENT)
+            background = shape(SURFACE, 20, LINE); contentDescription = "Voice"
             setOnClickListener {
                 val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                     .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    .putExtra(RecognizerIntent.EXTRA_PROMPT, "Tell Iris what to do")
-                try {
-                    startActivityForResult(i, REQ_VOICE)
-                } catch (_: Exception) {
+                try { startActivityForResult(i, REQ_VOICE) } catch (_: Exception) {
                     Toast.makeText(this@MainActivity, "No speech recognizer", Toast.LENGTH_LONG).show()
                 }
             }
         }
         val send = TextView(this).apply {
-            text = "↑"
-            textSize = 18f
-            gravity = Gravity.CENTER
+            text = "↑"; textSize = 18f; gravity = Gravity.CENTER
             setTextColor(if (dark) 0xFF1A1508.toInt() else Color.WHITE)
-            background = shape(GOLD, 22)
-            setOnClickListener { sendMessage() }
+            background = shape(GOLD, 22); setOnClickListener { sendMessage() }
         }
         composeBar.addView(attach, lp(dp(40), dp(40), r = 6))
         composeBar.addView(input, lp(0, WRAP, 1f, r = 6))
         composeBar.addView(mic, lp(dp(40), dp(40), r = 6))
         composeBar.addView(send, lp(dp(44), dp(44)))
         root.addView(composeBar, lp(MATCH, WRAP, t = 8))
-
         setContentView(root)
-
         AgentEngine.logListeners.add(logL)
         AgentEngine.stateListeners.add(stateL)
         AgentEngine.taskListeners.add(taskL)
         refreshStatus()
-
-        if (prefs().getString("api_key", "").isNullOrBlank()) openSettings()
+        if (prefs().getString("api_key", "").isNullOrBlank() &&
+            prefs().getString("openai_key", "").isNullOrBlank()) openSettings()
     }
 
     private fun sendMessage() {
         val t = input.text.toString().trim()
         if (t.isEmpty()) return
-        if (prefs().getString("api_key", "")!!.trim().isEmpty()) {
-            Toast.makeText(this, "Add a Gemini API key in Settings", Toast.LENGTH_LONG).show()
-            openSettings()
-            return
+        val hasKey = prefs().getString("api_key", "")!!.trim().isNotEmpty() ||
+            prefs().getString("openai_key", "")!!.trim().isNotEmpty()
+        if (!hasKey) {
+            Toast.makeText(this, "Add a Gemini or OpenAI key in Settings", Toast.LENGTH_LONG).show()
+            openSettings(); return
         }
         input.setText("")
         val id = if (targetId != null) AgentEngine.reply(targetId!!, t) else AgentEngine.send(t)
@@ -289,105 +226,67 @@ class MainActivity : Activity() {
         refreshStatus()
     }
 
-    private fun toggleSettings() {
-        if (settingsOpen) closeSettings() else openSettings()
-    }
+    private fun toggleSettings() { if (settingsOpen) closeSettings() else openSettings() }
 
     private fun openSettings() {
         settingsOpen = true
-        scroll.visibility = View.GONE
-        composeBar.visibility = View.GONE
-        settingsPanel.visibility = View.VISIBLE
-        rebuildTasks()
-        rebuildMedia()
-        rebuildConnections()
-        hideKeyboard()
+        scroll.visibility = View.GONE; composeBar.visibility = View.GONE; settingsPanel.visibility = View.VISIBLE
+        rebuildTasks(); rebuildMedia(); rebuildConnections(); hideKeyboard()
     }
 
     private fun closeSettings() {
         settingsOpen = false
-        settingsPanel.visibility = View.GONE
-        scroll.visibility = View.VISIBLE
-        composeBar.visibility = View.VISIBLE
+        settingsPanel.visibility = View.GONE; scroll.visibility = View.VISIBLE; composeBar.visibility = View.VISIBLE
         input.requestFocus()
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+            .showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
     }
 
     private fun hideKeyboard() {
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.hideSoftInputFromWindow(input.windowToken, 0)
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(input.windowToken, 0)
     }
 
     private fun buildSettingsPanel(): ScrollView {
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, dp(24))
-        }
-
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, dp(24)) }
         fun section(title: String) {
             col.addView(TextView(this).apply {
-                text = title
-                textSize = 12f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(MUTED)
+                text = title; textSize = 12f; setTypeface(null, Typeface.BOLD); setTextColor(MUTED)
                 setPadding(0, dp(16), 0, dp(6))
             })
         }
-
         fun field(hint: String, key: String, password: Boolean = false) {
-            val e = EditText(this).apply {
-                this.hint = hint
-                setText(prefs().getString(key, "") ?: "")
-                setTextColor(INK)
-                setHintTextColor(MUTED)
-                if (password) {
-                    inputType = android.text.InputType.TYPE_CLASS_TEXT or
-                        android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-                }
-                background = shape(SURFACE, 12)
-                setPadding(dp(12), dp(10), dp(12), dp(10))
-                setOnFocusChangeListener { _, has ->
-                    if (!has) prefs().edit().putString(key, text.toString().trim()).apply()
-                }
-            }
-            col.addView(e, lp(MATCH, WRAP, b = 6))
+            col.addView(EditText(this).apply {
+                this.hint = hint; setText(prefs().getString(key, "") ?: "")
+                setTextColor(INK); setHintTextColor(MUTED)
+                if (password) inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                background = shape(SURFACE, 12); setPadding(dp(12), dp(10), dp(12), dp(10))
+                setOnFocusChangeListener { _, has -> if (!has) prefs().edit().putString(key, text.toString().trim()).apply() }
+            }, lp(MATCH, WRAP, b = 6))
         }
-
         fun toggle(label: String, key: String, default: Boolean, onChange: ((Boolean) -> Unit)? = null) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(4), 0, dp(4))
-            }
-            row.addView(TextView(this).apply {
-                text = label
-                textSize = 15f
-                setTextColor(INK)
-            }, lp(0, WRAP, 1f))
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(4), 0, dp(4)) }
+            row.addView(TextView(this).apply { text = label; textSize = 15f; setTextColor(INK) }, lp(0, WRAP, 1f))
             row.addView(Switch(this).apply {
                 isChecked = prefs().getBoolean(key, default)
-                setOnCheckedChangeListener { _, on ->
-                    prefs().edit().putBoolean(key, on).apply()
-                    onChange?.invoke(on)
-                }
+                setOnCheckedChangeListener { _, on -> prefs().edit().putBoolean(key, on).apply(); onChange?.invoke(on) }
             })
             col.addView(row)
         }
-
         fun linkRow(label: String, action: () -> Unit) {
             col.addView(TextView(this).apply {
-                text = label
-                textSize = 15f
-                setTextColor(ACCENT)
-                setPadding(0, dp(12), 0, dp(12))
+                text = label; textSize = 15f; setTextColor(ACCENT); setPadding(0, dp(12), 0, dp(12))
                 setOnClickListener { action() }
             })
         }
 
         section("ACCOUNT")
         field("Gemini API key", "api_key", password = true)
-        field("Model (e.g. gemini-2.5-flash)", "model")
+        field("Preferred Gemini model (auto-fallback if it fails)", "model")
+        field("Provider: auto | gemini | openai", "provider")
+        field("OpenAI-compatible API key (second provider)", "openai_key", password = true)
+        field("OpenAI base URL (default api.openai.com/v1)", "openai_base")
+        field("OpenAI model (e.g. gpt-4o-mini)", "openai_model")
         field("GitHub token (self-modify / repo tools)", "github_token", password = true)
 
         section("CONTROL")
@@ -400,11 +299,9 @@ class MainActivity : Activity() {
         toggle("Speak replies", "speak", true)
         toggle("Face island", "bubble", false) { on ->
             if (on) {
-                if (!Settings.canDrawOverlays(this)) {
+                if (!Settings.canDrawOverlays(this))
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                } else {
-                    try { startForegroundService(Intent(this, OverlayService::class.java)) } catch (_: Exception) { }
-                }
+                else try { startForegroundService(Intent(this, OverlayService::class.java)) } catch (_: Exception) { }
             }
         }
         toggle("Quick access", "quick_on", true) { on ->
@@ -416,11 +313,9 @@ class MainActivity : Activity() {
         toggle("Daily summary", "digest_on", false)
         linkRow("Keep alive (battery)") {
             val pm = getSystemService(android.os.PowerManager::class.java)
-            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            if (!pm.isIgnoringBatteryOptimizations(packageName))
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
-            } else {
-                Toast.makeText(this, "Already unrestricted. Allow autostart and lock Iris in Recents.", Toast.LENGTH_LONG).show()
-            }
+            else Toast.makeText(this, "Already unrestricted.", Toast.LENGTH_LONG).show()
         }
 
         section("PC")
@@ -429,12 +324,8 @@ class MainActivity : Activity() {
         section("CONNECTED APPS & ACCOUNTS")
         connectionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(connectionsBox)
-        linkRow("Enable notification access") {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-        }
-        linkRow("Enable screen control (Accessibility)") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+        linkRow("Enable notification access") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+        linkRow("Enable screen control (Accessibility)") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         linkRow("Refresh connection list") { rebuildConnections() }
 
         section("MEDIA LIBRARY")
@@ -448,9 +339,7 @@ class MainActivity : Activity() {
         section("ACTIVE TASKS")
         tasksBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(tasksBox)
-
         linkRow("Done — back to chat") { closeSettings() }
-
         return ScrollView(this).apply { addView(col) }
     }
 
@@ -459,75 +348,43 @@ class MainActivity : Activity() {
         connectionsBox.removeAllViews()
         val notifOn = NotifLog.hasAccess(this)
         val screenOn = prefs().getBoolean("screen", false) && AgentAccessibilityService.instance != null
-
         connectionsBox.addView(TextView(this).apply {
-            text = "Permissions"
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(INK)
-            setPadding(0, 0, 0, dp(4))
+            text = "Permissions"; textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(INK); setPadding(0, 0, 0, dp(4))
         })
         connectionsBox.addView(TextView(this).apply {
             text = "Notification access: " + if (notifOn) "On" else "Off — needed for social inbox"
-            textSize = 13f
-            setTextColor(if (notifOn) ACCENT else MUTED)
-            setPadding(0, 0, 0, dp(2))
+            textSize = 13f; setTextColor(if (notifOn) ACCENT else MUTED)
         })
         connectionsBox.addView(TextView(this).apply {
             text = "Screen control: " + if (screenOn) "On" else "Off — needed to post / tap in apps"
-            textSize = 13f
-            setTextColor(if (screenOn) ACCENT else MUTED)
-            setPadding(0, 0, 0, dp(8))
+            textSize = 13f; setTextColor(if (screenOn) ACCENT else MUTED); setPadding(0, 0, 0, dp(8))
         })
-
         connectionsBox.addView(TextView(this).apply {
-            text = "Social & messaging"
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(INK)
-            setPadding(0, dp(6), 0, dp(4))
+            text = "Social & messaging"; textSize = 13f; setTypeface(null, Typeface.BOLD); setTextColor(INK); setPadding(0, dp(6), 0, dp(4))
         })
-
-        var anyInstalled = false
+        var any = false
         for ((pkg, name) in SOCIAL_TARGETS) {
             if (!isInstalled(pkg)) continue
-            anyInstalled = true
+            any = true
             val status = if (notifOn) "Connected (notifications)" else "Installed · enable notification access"
             connectionsBox.addView(TextView(this).apply {
-                text = "$name  ·  $status"
-                textSize = 14f
-                setTextColor(INK)
-                setPadding(0, dp(4), 0, dp(4))
+                text = "$name  ·  $status"; textSize = 14f; setTextColor(INK); setPadding(0, dp(4), 0, dp(4))
             })
         }
-        if (!anyInstalled) {
-            connectionsBox.addView(TextView(this).apply {
-                text = "None of the supported social apps are installed."
-                textSize = 13f
-                setTextColor(MUTED)
-            })
-        }
-
+        if (!any) connectionsBox.addView(TextView(this).apply {
+            text = "None of the supported social apps are installed."; textSize = 13f; setTextColor(MUTED)
+        })
         connectionsBox.addView(TextView(this).apply {
-            text = "Not installed (tap Connect for Play Store)"
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(MUTED)
-            setPadding(0, dp(12), 0, dp(4))
+            text = "Not installed (tap Connect for Play Store)"; textSize = 13f; setTypeface(null, Typeface.BOLD)
+            setTextColor(MUTED); setPadding(0, dp(12), 0, dp(4))
         })
         for ((pkg, name) in SOCIAL_TARGETS) {
             if (isInstalled(pkg)) continue
             connectionsBox.addView(TextView(this).apply {
-                text = "Connect $name"
-                textSize = 14f
-                setTextColor(ACCENT)
-                setPadding(0, dp(6), 0, dp(6))
+                text = "Connect $name"; textSize = 14f; setTextColor(ACCENT); setPadding(0, dp(6), 0, dp(6))
                 setOnClickListener {
-                    try {
-                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg")))
-                    } catch (_: Exception) {
-                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg")))
-                    }
+                    try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))) }
+                    catch (_: Exception) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))) }
                 }
             })
         }
@@ -538,39 +395,18 @@ class MainActivity : Activity() {
         tasksBox.removeAllViews()
         val ts = AgentEngine.tasks.filter { it.active }
         if (ts.isEmpty()) {
-            tasksBox.addView(TextView(this).apply {
-                text = "No active tasks"
-                setTextColor(MUTED)
-                textSize = 14f
-            })
+            tasksBox.addView(TextView(this).apply { text = "No active tasks"; setTextColor(MUTED); textSize = 14f })
             return
         }
         for (t in ts) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(6), 0, dp(6))
-            }
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, dp(6)) }
+            row.addView(TextView(this).apply { text = "#${t.id} ${t.title} (${t.state})"; textSize = 14f; setTextColor(INK) }, lp(0, WRAP, 1f))
             row.addView(TextView(this).apply {
-                text = "#${t.id} ${t.title} (${t.state})"
-                textSize = 14f
-                setTextColor(INK)
-            }, lp(0, WRAP, 1f))
-            row.addView(TextView(this).apply {
-                text = "Reply"
-                setTextColor(ACCENT)
-                setPadding(dp(8), 0, dp(8), 0)
-                setOnClickListener {
-                    targetId = t.id
-                    closeSettings()
-                    input.hint = "Reply to #${t.id}…"
-                    input.requestFocus()
-                }
+                text = "Reply"; setTextColor(ACCENT); setPadding(dp(8), 0, dp(8), 0)
+                setOnClickListener { targetId = t.id; closeSettings(); input.hint = "Reply to #${t.id}…"; input.requestFocus() }
             })
             row.addView(TextView(this).apply {
-                text = "Stop"
-                setTextColor(RED)
-                setPadding(dp(8), 0, 0, 0)
+                text = "Stop"; setTextColor(RED); setPadding(dp(8), 0, 0, 0)
                 setOnClickListener { AgentEngine.stop(t.id); rebuildTasks() }
             })
             tasksBox.addView(row)
@@ -582,49 +418,24 @@ class MainActivity : Activity() {
         mediaBox.removeAllViews()
         val a = Media.list(this)
         if (a.length() == 0) {
-            mediaBox.addView(TextView(this).apply {
-                text = "No uploads yet — paperclip or Add below"
-                setTextColor(MUTED)
-                textSize = 13f
-            })
+            mediaBox.addView(TextView(this).apply { text = "No uploads yet"; setTextColor(MUTED); textSize = 13f })
             return
         }
         for (i in 0 until a.length()) {
-            val o = a.getJSONObject(i)
-            val id = o.optString("id")
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(4), 0, dp(4))
-            }
-            row.addView(TextView(this).apply {
-                text = "${o.optString("kind")}  ${o.optString("name")}  ($id)"
-                textSize = 13f
-                setTextColor(INK)
-            }, lp(0, WRAP, 1f))
-            row.addView(TextView(this).apply {
-                text = "Remove"
-                setTextColor(RED)
-                setOnClickListener {
-                    Media.delete(this@MainActivity, id)
-                    rebuildMedia()
-                }
-            })
+            val o = a.getJSONObject(i); val id = o.optString("id")
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(this).apply { text = "${o.optString("kind")}  ${o.optString("name")}"; textSize = 13f; setTextColor(INK) }, lp(0, WRAP, 1f))
+            row.addView(TextView(this).apply { text = "Remove"; setTextColor(RED); setOnClickListener { Media.delete(this@MainActivity, id); rebuildMedia() } })
             mediaBox.addView(row)
         }
     }
 
     private fun pickFile() {
-        val i = Intent(Intent.ACTION_GET_CONTENT).apply {
-            type = "*/*"
-            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "application/pdf", "text/*", "text/csv", "text/markdown"))
-            addCategory(Intent.CATEGORY_OPENABLE)
-        }
         try {
-            startActivityForResult(Intent.createChooser(i, "Attach file"), REQ_ATTACH)
-        } catch (_: Exception) {
-            Toast.makeText(this, "No file picker available", Toast.LENGTH_LONG).show()
-        }
+            startActivityForResult(Intent.createChooser(Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "*/*"; addCategory(Intent.CATEGORY_OPENABLE)
+            }, "Attach file"), REQ_ATTACH)
+        } catch (_: Exception) { Toast.makeText(this, "No file picker", Toast.LENGTH_LONG).show() }
     }
 
     private fun showPostQueue() {
@@ -633,47 +444,28 @@ class MainActivity : Activity() {
             val o = posts.getJSONObject(i)
             "${o.optString("status")} · ${o.optString("platform")} · ${o.optString("text").take(48)}"
         }
-        AlertDialog.Builder(this)
-            .setTitle("Post queue")
-            .setMessage(if (lines.isEmpty()) "(empty — schedule via chat after approving text)" else lines.joinToString("\n"))
-            .setPositiveButton("OK", null)
-            .show()
+        AlertDialog.Builder(this).setTitle("Post queue")
+            .setMessage(if (lines.isEmpty()) "(empty)" else lines.joinToString("\n"))
+            .setPositiveButton("OK", null).show()
     }
 
     private fun pastePairLink() {
         val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
         val raw = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()?.trim() ?: ""
-        if (raw.isEmpty()) {
-            Toast.makeText(this, "Copy the pair link from the PC first", Toast.LENGTH_LONG).show()
-            return
-        }
+        if (raw.isEmpty()) { Toast.makeText(this, "Copy the pair link first", Toast.LENGTH_LONG).show(); return }
         val link = Pc.parseLink(raw)
-        if (link == null) {
-            Toast.makeText(this, "Not a valid Iris pair link", Toast.LENGTH_LONG).show()
-            return
-        }
+        if (link == null) { Toast.makeText(this, "Not a valid Iris pair link", Toast.LENGTH_LONG).show(); return }
         Thread {
-            val result = try {
-                Pc.pair(this, link, Build.MODEL, true)
-            } catch (e: Exception) {
-                "ERROR: ${e.message}"
-            }
+            val result = try { Pc.pair(this, link, Build.MODEL, true) } catch (e: Exception) { "ERROR: ${e.message}" }
             ui.post { Toast.makeText(this, result.toString(), Toast.LENGTH_LONG).show() }
         }.start()
     }
 
     private fun refreshStatus() {
         val n = AgentEngine.tasks.count { it.active }
-        status.text = when (n) {
-            0 -> "Ready"
-            1 -> "Working · tap to stop"
-            else -> "$n working · tap to stop"
-        }
+        status.text = when (n) { 0 -> "Ready"; 1 -> "Working · tap to stop"; else -> "$n working · tap to stop" }
         status.setTextColor(if (n > 0) GOLD else MUTED)
-        if (targetId != null && AgentEngine.task(targetId!!) == null) {
-            targetId = null
-            input.hint = "Message Iris"
-        }
+        if (targetId != null && AgentEngine.task(targetId!!) == null) { targetId = null; input.hint = "Message Iris" }
     }
 
     private fun add(v: View, g: Int = Gravity.START, top: Int = 8) {
@@ -681,30 +473,18 @@ class MainActivity : Activity() {
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
-    private fun bubble(text: String, fill: Int, ink: Int): TextView = TextView(this).apply {
-        this.text = text
-        textSize = 15f
-        setTextColor(ink)
-        setPadding(dp(14), dp(10), dp(14), dp(10))
-        background = shape(fill, 18)
-        maxWidth = (resources.displayMetrics.widthPixels * 0.84).toInt()
-        setTextIsSelectable(true)
+    private fun bubble(text: String, fill: Int, ink: Int) = TextView(this).apply {
+        this.text = text; textSize = 15f; setTextColor(ink)
+        setPadding(dp(14), dp(10), dp(14), dp(10)); background = shape(fill, 18)
+        maxWidth = (resources.displayMetrics.widthPixels * 0.84).toInt(); setTextIsSelectable(true)
     }
 
-    private fun note(text: String, italic: Boolean): TextView = TextView(this).apply {
-        this.text = text
-        textSize = 12f
-        setTypeface(null, if (italic) Typeface.ITALIC else Typeface.NORMAL)
-        setTextColor(MUTED)
-        maxWidth = (resources.displayMetrics.widthPixels * 0.9).toInt()
+    private fun note(text: String, italic: Boolean) = TextView(this).apply {
+        this.text = text; textSize = 12f; setTypeface(null, if (italic) Typeface.ITALIC else Typeface.NORMAL)
+        setTextColor(MUTED); maxWidth = (resources.displayMetrics.widthPixels * 0.9).toInt()
     }
 
-    private fun finishStep(id: Int) {
-        steps.remove(id)?.let { (tv, txt) ->
-            tv.text = "✓ $txt"
-            tv.setTextColor(MUTED)
-        }
-    }
+    private fun finishStep(id: Int) { steps.remove(id)?.let { (tv, txt) -> tv.text = "✓ $txt"; tv.setTextColor(MUTED) } }
 
     private fun tag(id: Int) {
         if (id == lastTag) return
@@ -712,9 +492,7 @@ class MainActivity : Activity() {
         val title = AgentEngine.task(id)?.title ?: ""
         add(TextView(this).apply {
             text = "#$id" + if (title.isNotEmpty()) "  $title" else ""
-            textSize = 11f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(PALETTE[id % PALETTE.size])
+            textSize = 11f; setTypeface(null, Typeface.BOLD); setTextColor(PALETTE[id % PALETTE.size])
         }, Gravity.START, 14)
     }
 
@@ -724,15 +502,8 @@ class MainActivity : Activity() {
         if (s.startsWith("→ ")) {
             finishStep(id)
             val txt = s.substring(2)
-            val tv = TextView(this).apply {
-                text = "… $txt"
-                textSize = 12f
-                typeface = Typeface.MONOSPACE
-                setTextColor(ACCENT)
-            }
-            steps[id] = Pair(tv, txt)
-            add(tv, top = 4)
-            return
+            val tv = TextView(this).apply { text = "… $txt"; textSize = 12f; typeface = Typeface.MONOSPACE; setTextColor(ACCENT) }
+            steps[id] = Pair(tv, txt); add(tv, top = 4); return
         }
         finishStep(id)
         when {
@@ -750,27 +521,18 @@ class MainActivity : Activity() {
         when (requestCode) {
             REQ_VOICE -> {
                 val spoken = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.trim()
-                if (!spoken.isNullOrEmpty()) {
-                    input.setText(spoken)
-                    sendMessage()
-                }
+                if (!spoken.isNullOrEmpty()) { input.setText(spoken); sendMessage() }
             }
             REQ_ATTACH -> {
                 val uri = data?.data ?: return
                 val id = Media.importUri(this, uri)
-                if (id.startsWith("ERROR")) {
-                    Toast.makeText(this, id, Toast.LENGTH_LONG).show()
-                } else {
-                    Toast.makeText(this, "Attached · id $id", Toast.LENGTH_LONG).show()
-                    if (settingsOpen) rebuildMedia()
-                }
+                Toast.makeText(this, if (id.startsWith("ERROR")) id else "Attached · id $id", Toast.LENGTH_LONG).show()
+                if (settingsOpen && !id.startsWith("ERROR")) rebuildMedia()
             }
         }
     }
 
-    override fun onBackPressed() {
-        if (settingsOpen) closeSettings() else super.onBackPressed()
-    }
+    override fun onBackPressed() { if (settingsOpen) closeSettings() else super.onBackPressed() }
 
     override fun onDestroy() {
         AgentEngine.logListeners.remove(logL)
