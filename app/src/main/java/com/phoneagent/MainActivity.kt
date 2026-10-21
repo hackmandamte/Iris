@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
@@ -31,6 +32,7 @@ import android.widget.Toast
  * Grok-like chat shell:
  * Home: title, status (tap = stop), settings gear, conversation, bottom compose (+ attach).
  * Settings: full panel; compose hidden; on close, compose returns + focus.
+ * Palette: soft peach / lavender pastels, gold hero accents, follows system light/dark.
  */
 class MainActivity : Activity() {
     companion object {
@@ -38,17 +40,26 @@ class MainActivity : Activity() {
         private const val REQ_ATTACH = 43
     }
 
-    private val ACCENT = 0xFF0A84FF.toInt()
-    private val INK = 0xFF1C1C1E.toInt()
-    private val MUTED = 0xFF8E8E93.toInt()
-    private val LINE = 0xFFE5E5EA.toInt()
-    private val SURFACE = 0xFFF2F2F7.toInt()
-    private val RED = 0xFFC62828.toInt()
-    private val RED_BG = 0xFFFDE8E8.toInt()
-    private val PALETTE = intArrayOf(
-        0xFF0A84FF.toInt(), 0xFF1B7F3B.toInt(), 0xFF8E44AD.toInt(),
-        0xFFD35400.toInt(), 0xFF16A085.toInt(), 0xFFC0392B.toInt()
+    // Resolved in onCreate via resolveTheme()
+    private var ACCENT = 0xFF5B7CFF.toInt()
+    private var INK = 0xFF1C1C1E.toInt()
+    private var MUTED = 0xFF8E8E93.toInt()
+    private var LINE = 0xFFE5E5EA.toInt()
+    private var SURFACE = 0xFFF5F0F7.toInt()
+    private var BG = 0xFFFAF7F5.toInt()
+    private var USER_BUBBLE = 0xFFFFE8D6.toInt()  // soft peach
+    private var USER_INK = 0xFF4A3428.toInt()
+    private var AGENT_BUBBLE = 0xFFE8E4F5.toInt()  // soft lavender-blue
+    private var AGENT_INK = 0xFF2A2640.toInt()
+    private var GOLD = 0xFFC9A227.toInt()
+    private var GOLD_SOFT = 0xFFF5E6B8.toInt()
+    private var RED = 0xFFC62828.toInt()
+    private var RED_BG = 0xFFFDE8E8.toInt()
+    private var PALETTE = intArrayOf(
+        0xFF5B7CFF.toInt(), 0xFF9B6DFF.toInt(), 0xFFE8A87C.toInt(),
+        0xFFC9A227.toInt(), 0xFF7B9EFF.toInt(), 0xFFD4849A.toInt()
     )
+    private var dark = false
     private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
@@ -84,8 +95,53 @@ class MainActivity : Activity() {
     private fun lp(w: Int, h: Int, weight: Float = 0f, l: Int = 0, t: Int = 0, r: Int = 0, b: Int = 0) =
         LinearLayout.LayoutParams(w, h, weight).apply { setMargins(dp(l), dp(t), dp(r), dp(b)) }
 
+    private fun resolveTheme() {
+        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        dark = night
+        if (night) {
+            ACCENT = 0xFF8BA3FF.toInt()
+            INK = 0xFFF2F0F5.toInt()
+            MUTED = 0xFFA09AAB.toInt()
+            LINE = 0xFF3A3548.toInt()
+            SURFACE = 0xFF2A2638.toInt()
+            BG = 0xFF16141F.toInt()
+            USER_BUBBLE = 0xFF4A3A32.toInt()
+            USER_INK = 0xFFFFE8D6.toInt()
+            AGENT_BUBBLE = 0xFF2E2A42.toInt()
+            AGENT_INK = 0xFFE4E0F5.toInt()
+            GOLD = 0xFFE0C35A.toInt()
+            GOLD_SOFT = 0xFF3D3520.toInt()
+            RED = 0xFFFF6B6B.toInt()
+            RED_BG = 0xFF3D2020.toInt()
+            PALETTE = intArrayOf(
+                0xFF8BA3FF.toInt(), 0xFFB794FF.toInt(), 0xFFE8A87C.toInt(),
+                0xFFE0C35A.toInt(), 0xFF9BB0FF.toInt(), 0xFFE8A0B0.toInt()
+            )
+        } else {
+            ACCENT = 0xFF5B7CFF.toInt()
+            INK = 0xFF1C1C1E.toInt()
+            MUTED = 0xFF8E8E93.toInt()
+            LINE = 0xFFE8E0EC.toInt()
+            SURFACE = 0xFFF5F0F7.toInt()
+            BG = 0xFFFAF7F5.toInt()
+            USER_BUBBLE = 0xFFFFE8D6.toInt()
+            USER_INK = 0xFF4A3428.toInt()
+            AGENT_BUBBLE = 0xFFE8E4F5.toInt()
+            AGENT_INK = 0xFF2A2640.toInt()
+            GOLD = 0xFFC9A227.toInt()
+            GOLD_SOFT = 0xFFF5E6B8.toInt()
+            RED = 0xFFC62828.toInt()
+            RED_BG = 0xFFFDE8E8.toInt()
+            PALETTE = intArrayOf(
+                0xFF5B7CFF.toInt(), 0xFF9B6DFF.toInt(), 0xFFE8A87C.toInt(),
+                0xFFC9A227.toInt(), 0xFF7B9EFF.toInt(), 0xFFD4849A.toInt()
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        resolveTheme()
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.RECORD_AUDIO), 1)
         } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -94,7 +150,7 @@ class MainActivity : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(BG)
             setPadding(dp(14), dp(14), dp(14), dp(10))
         }
 
@@ -145,7 +201,7 @@ class MainActivity : Activity() {
         val attach = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_menu_upload)
             setColorFilter(ACCENT)
-            background = shape(Color.WHITE, 20, LINE)
+            background = shape(SURFACE, 20, LINE)
             contentDescription = "Attach"
             setOnClickListener { pickFile() }
         }
@@ -161,7 +217,7 @@ class MainActivity : Activity() {
         val mic = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_btn_speak_now)
             setColorFilter(ACCENT)
-            background = shape(Color.WHITE, 20, LINE)
+            background = shape(SURFACE, 20, LINE)
             contentDescription = "Voice"
             setOnClickListener {
                 val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -178,8 +234,8 @@ class MainActivity : Activity() {
             text = "↑"
             textSize = 18f
             gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = shape(INK, 22)
+            setTextColor(if (dark) 0xFF1A1508.toInt() else Color.WHITE)
+            background = shape(GOLD, 22)
             setOnClickListener { sendMessage() }
         }
         composeBar.addView(attach, lp(dp(40), dp(40), r = 6))
@@ -261,6 +317,8 @@ class MainActivity : Activity() {
             val e = EditText(this).apply {
                 this.hint = hint
                 setText(prefs().getString(key, "") ?: "")
+                setTextColor(INK)
+                setHintTextColor(MUTED)
                 if (password) {
                     inputType = android.text.InputType.TYPE_CLASS_TEXT or
                         android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -499,7 +557,7 @@ class MainActivity : Activity() {
             1 -> "Working · tap to stop"
             else -> "$n working · tap to stop"
         }
-        status.setTextColor(if (n > 0) ACCENT else MUTED)
+        status.setTextColor(if (n > 0) GOLD else MUTED)
         if (targetId != null && AgentEngine.task(targetId!!) == null) {
             targetId = null
             input.hint = "Message Iris"
@@ -554,7 +612,7 @@ class MainActivity : Activity() {
         if (s.startsWith("→ ")) {
             finishStep(id)
             val txt = s.substring(2)
-            val tv = TextView(this).apply {
+            val tv = TextView((this).apply {
                 text = "… $txt"
                 textSize = 12f
                 typeface = Typeface.MONOSPACE
@@ -566,8 +624,8 @@ class MainActivity : Activity() {
         }
         finishStep(id)
         when {
-            s.startsWith("You: ") -> add(bubble(s.substring(5), INK, Color.WHITE), Gravity.END, 6)
-            s.startsWith("🤖 ") -> add(bubble(s.substring(3), SURFACE, INK), Gravity.START, 6)
+            s.startsWith("You: ") -> add(bubble(s.substring(5), USER_BUBBLE, USER_INK), Gravity.END, 6)
+            s.startsWith("🤖 ") -> add(bubble(s.substring(3), AGENT_BUBBLE, AGENT_INK), Gravity.START, 6)
             s.startsWith("💭 ") -> add(note(s.substring(3), true), Gravity.START, 6)
             s.startsWith("⚠") -> add(bubble(s.removePrefix("⚠").trim(), RED_BG, RED), Gravity.START, 6)
             else -> add(note(s, false), Gravity.START, 4)
