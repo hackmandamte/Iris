@@ -29,10 +29,7 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * Grok-like chat shell:
- * Home: title, status (tap = stop), settings gear, conversation, bottom compose (+ attach).
- * Settings: full panel; compose hidden; on close, compose returns + focus.
- * Palette: soft peach / lavender pastels, gold hero accents, follows system light/dark.
+ * Grok-like chat shell with connected apps list in Settings.
  */
 class MainActivity : Activity() {
     companion object {
@@ -40,7 +37,6 @@ class MainActivity : Activity() {
         private const val REQ_ATTACH = 43
     }
 
-    // Resolved in onCreate via resolveTheme()
     private var ACCENT = 0xFF5B7CFF.toInt()
     private var INK = 0xFF1C1C1E.toInt()
     private var MUTED = 0xFF8E8E93.toInt()
@@ -71,12 +67,28 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var tasksBox: LinearLayout
     private lateinit var mediaBox: LinearLayout
+    private lateinit var connectionsBox: LinearLayout
 
     private var settingsOpen = false
     private var targetId: Int? = null
     private var lastTag = -1
     private val steps = HashMap<Int, Pair<TextView, String>>()
     private val ui = Handler(Looper.getMainLooper())
+
+    private val SOCIAL_TARGETS = listOf(
+        "com.instagram.android" to "Instagram",
+        "com.whatsapp" to "WhatsApp",
+        "com.whatsapp.w4b" to "WhatsApp Business",
+        "org.telegram.messenger" to "Telegram",
+        "org.telegram.messenger.web" to "Telegram (web)",
+        "com.twitter.android" to "X",
+        "com.google.android.youtube" to "YouTube",
+        "com.facebook.katana" to "Facebook",
+        "com.facebook.orca" to "Messenger",
+        "com.snapchat.android" to "Snapchat",
+        "com.zhiliaoapp.musically" to "TikTok",
+        "com.linkedin.android" to "LinkedIn"
+    )
 
     private val logL: (Int, String) -> Unit = { id, s -> ui.post { renderLine(id, s) } }
     private val stateL: (Boolean) -> Unit = { _ -> ui.post { refreshStatus() } }
@@ -94,6 +106,15 @@ class MainActivity : Activity() {
 
     private fun lp(w: Int, h: Int, weight: Float = 0f, l: Int = 0, t: Int = 0, r: Int = 0, b: Int = 0) =
         LinearLayout.LayoutParams(w, h, weight).apply { setMargins(dp(l), dp(t), dp(r), dp(b)) }
+
+    private fun isInstalled(pkg: String): Boolean {
+        return try {
+            packageManager.getPackageInfo(pkg, 0)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     private fun resolveTheme() {
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -279,6 +300,7 @@ class MainActivity : Activity() {
         settingsPanel.visibility = View.VISIBLE
         rebuildTasks()
         rebuildMedia()
+        rebuildConnections()
         hideKeyboard()
     }
 
@@ -404,6 +426,17 @@ class MainActivity : Activity() {
         section("PC")
         linkRow("Pair PC (paste link from clipboard)") { pastePairLink() }
 
+        section("CONNECTED APPS & ACCOUNTS")
+        connectionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(connectionsBox)
+        linkRow("Enable notification access") {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
+        linkRow("Enable screen control (Accessibility)") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+        linkRow("Refresh connection list") { rebuildConnections() }
+
         section("MEDIA LIBRARY")
         mediaBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(mediaBox)
@@ -419,6 +452,85 @@ class MainActivity : Activity() {
         linkRow("Done — back to chat") { closeSettings() }
 
         return ScrollView(this).apply { addView(col) }
+    }
+
+    private fun rebuildConnections() {
+        if (!::connectionsBox.isInitialized) return
+        connectionsBox.removeAllViews()
+        val notifOn = NotifLog.hasAccess(this)
+        val screenOn = prefs().getBoolean("screen", false) && AgentAccessibilityService.instance != null
+
+        connectionsBox.addView(TextView(this).apply {
+            text = "Permissions"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(INK)
+            setPadding(0, 0, 0, dp(4))
+        })
+        connectionsBox.addView(TextView(this).apply {
+            text = "Notification access: " + if (notifOn) "On" else "Off — needed for social inbox"
+            textSize = 13f
+            setTextColor(if (notifOn) ACCENT else MUTED)
+            setPadding(0, 0, 0, dp(2))
+        })
+        connectionsBox.addView(TextView(this).apply {
+            text = "Screen control: " + if (screenOn) "On" else "Off — needed to post / tap in apps"
+            textSize = 13f
+            setTextColor(if (screenOn) ACCENT else MUTED)
+            setPadding(0, 0, 0, dp(8))
+        })
+
+        connectionsBox.addView(TextView(this).apply {
+            text = "Social & messaging"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(INK)
+            setPadding(0, dp(6), 0, dp(4))
+        })
+
+        var anyInstalled = false
+        for ((pkg, name) in SOCIAL_TARGETS) {
+            if (!isInstalled(pkg)) continue
+            anyInstalled = true
+            val status = if (notifOn) "Connected (notifications)" else "Installed · enable notification access"
+            connectionsBox.addView(TextView(this).apply {
+                text = "$name  ·  $status"
+                textSize = 14f
+                setTextColor(INK)
+                setPadding(0, dp(4), 0, dp(4))
+            })
+        }
+        if (!anyInstalled) {
+            connectionsBox.addView(TextView(this).apply {
+                text = "None of the supported social apps are installed."
+                textSize = 13f
+                setTextColor(MUTED)
+            })
+        }
+
+        connectionsBox.addView(TextView(this).apply {
+            text = "Not installed (tap Connect for Play Store)"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(MUTED)
+            setPadding(0, dp(12), 0, dp(4))
+        })
+        for ((pkg, name) in SOCIAL_TARGETS) {
+            if (isInstalled(pkg)) continue
+            connectionsBox.addView(TextView(this).apply {
+                text = "Connect $name"
+                textSize = 14f
+                setTextColor(ACCENT)
+                setPadding(0, dp(6), 0, dp(6))
+                setOnClickListener {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg")))
+                    } catch (_: Exception) {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg")))
+                    }
+                }
+            })
+        }
     }
 
     private fun rebuildTasks() {
