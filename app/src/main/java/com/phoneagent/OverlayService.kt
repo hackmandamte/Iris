@@ -3,6 +3,7 @@ package com.phoneagent
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.graphics.Color
@@ -27,13 +28,20 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * Foreground service. Keeps the agent alive and draws the "face island":
- * a black pill at the top of the screen, sized like the iPhone Dynamic Island,
- * with a face that reacts to what the agent does.
- * Tap = open task box. Long-press = summarize screen. Drag = reposition.
- * While speaking, the island shows only the current word.
+ * Foreground service + face island.
+ * Notification actions: Stop · Summarize · Mute · Reply · Open (only Open launches MainActivity).
+ * Island tap = overlay panel (send / mute / summarize / stop) without leaving the current app.
  */
 class OverlayService : Service() {
+    companion object {
+        const val ACTION_STOP = "com.phoneagent.ACTION_STOP"
+        const val ACTION_SUMMARIZE = "com.phoneagent.ACTION_SUMMARIZE"
+        const val ACTION_MUTE = "com.phoneagent.ACTION_MUTE"
+        const val ACTION_REPLY = "com.phoneagent.ACTION_REPLY"
+        const val ACTION_OPEN = "com.phoneagent.ACTION_OPEN"
+        private const val NOTIF_ID = 1
+    }
+
     private lateinit var wm: WindowManager
     private val ui = Handler(Looper.getMainLooper())
     private var island: LinearLayout? = null
@@ -77,6 +85,7 @@ class OverlayService : Service() {
     private val exprL: (Expr) -> Unit = { e -> ui.post { applyExpr(e) } }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun prefs() = getSharedPreferences("agent", MODE_PRIVATE)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -88,18 +97,52 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "STOP") {
-            removeViews()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            "STOP", ACTION_STOP -> {
+                AgentEngine.stopAll()
+                removeViews()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_SUMMARIZE -> {
+                AgentEngine.summarizeScreen()
+                refreshNotification()
+                return START_STICKY
+            }
+            ACTION_MUTE -> {
+                val on = !prefs().getBoolean("speak", true)
+                prefs().edit().putBoolean("speak", on).apply()
+                if (!on) Voice.stop()
+                Toast.makeText(this, if (on) "Speak on" else "Muted", Toast.LENGTH_SHORT).show()
+                refreshNotification()
+                return START_STICKY
+            }
+            ACTION_REPLY -> {
+                if (Settings.canDrawOverlays(this)) {
+                    ui.post {
+                        if (island == null && prefs().getBoolean("bubble", false)) showIsland()
+                        showPanel()
+                    }
+                } else {
+                    Toast.makeText(this, "Enable overlay permission for quick reply", Toast.LENGTH_LONG).show()
+                }
+                return START_STICKY
+            }
+            ACTION_OPEN -> {
+                val open = Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                startActivity(open)
+                return START_STICKY
+            }
         }
+
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel("agent_fg", "Agent running", NotificationManager.IMPORTANCE_LOW))
-        startForeground(1, Notification.Builder(this, "agent_fg")
-            .setSmallIcon(R.drawable.ic_stat_face)
-            .setContentTitle("Iris is active").build())
-        val sp = getSharedPreferences("agent", MODE_PRIVATE)
+        nm.createNotificationChannel(
+            NotificationChannel("agent_fg", "Agent running", NotificationManager.IMPORTANCE_LOW)
+        )
+        startForeground(NOTIF_ID, buildNotification())
+        val sp = prefs()
         if (sp.getBoolean("bubble", false) && Settings.canDrawOverlays(this)) showIsland()
         if (sp.getBoolean("quick_on", true)) {
             val svc = AgentAccessibilityService.instance
@@ -108,6 +151,44 @@ class OverlayService : Service() {
         }
         if (Pc.devices(this).isNotEmpty()) Pc.startPolling(applicationContext)
         return START_STICKY
+    }
+
+    private fun pi(action: String): PendingIntent {
+        val i = Intent(this, OverlayService::class.java).setAction(action)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
+        return PendingIntent.getService(this, action.hashCode(), i, flags)
+    }
+
+    private fun buildNotification(): Notification {
+        val speakOn = prefs().getBoolean("speak", true)
+        val muteLabel = if (speakOn) "Mute" else "Unmute"
+        val openApp = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val contentPi = PendingIntent.getActivity(
+            this, 0, openApp,
+            PendingIntent.FLAG_UPDATE_CURRENT or
+                if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
+        )
+        return Notification.Builder(this, "agent_fg")
+            .setSmallIcon(R.drawable.ic_stat_face)
+            .setContentTitle("Iris is active")
+            .setContentText(if (AgentEngine.running) "Working…" else "Ready")
+            .setContentIntent(contentPi)
+            .setOngoing(true)
+            .addAction(0, "Stop", pi(ACTION_STOP))
+            .addAction(0, "Summarize", pi(ACTION_SUMMARIZE))
+            .addAction(0, muteLabel, pi(ACTION_MUTE))
+            .addAction(0, "Reply", pi(ACTION_REPLY))
+            .addAction(0, "Open", pi(ACTION_OPEN))
+            .build()
+    }
+
+    private fun refreshNotification() {
+        try {
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTIF_ID, buildNotification())
+        } catch (_: Exception) { }
     }
 
     override fun onDestroy() {
@@ -119,7 +200,6 @@ class OverlayService : Service() {
         super.onDestroy()
     }
 
-    // ---- expressions ----
     private fun applyExpr(e: Expr) {
         val f = face ?: return
         ui.removeCallbacks(collapse)
@@ -132,7 +212,6 @@ class OverlayService : Service() {
         f.invalidate()
 
         if (e.mood == Mood.SPEAKING && e.text.isNotEmpty()) {
-            // Show only the current word while speaking
             val words = e.text.take(220).split(Regex("\\s+")).filter { it.isNotEmpty() }
             speakWords = words
             speakIndex = 0
@@ -143,7 +222,6 @@ class OverlayService : Service() {
                     islandText?.visibility = View.VISIBLE
                 }
             }
-            // Timed fallback when onRangeStart is unavailable
             ui.post(wordTick)
             ui.postDelayed(collapse, maxOf(3500L, e.text.length * 55L).coerceAtMost(14000L))
         } else if (e.text.isNotEmpty()) {
@@ -158,17 +236,17 @@ class OverlayService : Service() {
             tv?.visibility = View.GONE
             if (e.mood != Mood.IDLE) ui.postDelayed(collapse, 45000L)
         }
+        refreshNotification()
     }
 
-    // ---- the island (Dynamic Island proportions) ----
     private fun showIsland() {
         if (island != null) return
         if (!Settings.canDrawOverlays(this)) {
-            getSharedPreferences("agent", MODE_PRIVATE).edit().putBoolean("bubble", false).apply()
+            prefs().edit().putBoolean("bubble", false).apply()
             return
         }
         try {
-            val prefs = getSharedPreferences("agent", MODE_PRIVATE)
+            val prefs = prefs()
             val f = FaceView(this)
             val tv = TextView(this).apply {
                 setTextColor(Color.WHITE)
@@ -249,7 +327,7 @@ class OverlayService : Service() {
             face = f
             islandText = tv
         } catch (e: Exception) {
-            getSharedPreferences("agent", MODE_PRIVATE).edit().putBoolean("bubble", false).apply()
+            prefs().edit().putBoolean("bubble", false).apply()
             island = null
             face = null
             islandText = null
@@ -262,40 +340,66 @@ class OverlayService : Service() {
 
     private fun showPanel() {
         if (panel != null) return
+        if (!Settings.canDrawOverlays(this)) return
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(12), dp(12), dp(12))
             background = GradientDrawable().apply { setColor(0xF2202124.toInt()); cornerRadius = dp(18).toFloat() }
         }
-        val lg = TextView(this).apply { setTextColor(Color.WHITE); textSize = 12f; maxLines = 8; text = tail }
+        val lg = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            maxLines = 8
+            text = tail
+        }
         val et = EditText(this).apply {
-            hint = "Tell the agent what to do"
+            hint = "Message Iris"
             setTextColor(Color.WHITE)
             setHintTextColor(0x99FFFFFF.toInt())
         }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val send = Button(this).apply {
+        row.addView(Button(this).apply {
             text = "Send"
             setOnClickListener {
                 val t = et.text.toString().trim()
                 if (t.isNotEmpty()) { hidePanel(); AgentEngine.send(t) }
             }
-        }
-        val sum = Button(this).apply {
-            text = "Summarize screen"
+        })
+        row.addView(Button(this).apply {
+            text = "Summarize"
             setOnClickListener { hidePanel(); AgentEngine.summarizeScreen() }
-        }
-        val close = Button(this).apply { text = "Close"; setOnClickListener { hidePanel() } }
-        row.addView(send); row.addView(sum)
+        })
+        val speakOn = prefs().getBoolean("speak", true)
+        row.addView(Button(this).apply {
+            text = if (speakOn) "Mute" else "Unmute"
+            setOnClickListener {
+                val next = !prefs().getBoolean("speak", true)
+                prefs().edit().putBoolean("speak", next).apply()
+                if (!next) Voice.stop()
+                Toast.makeText(this@OverlayService, if (next) "Speak on" else "Muted", Toast.LENGTH_SHORT).show()
+                hidePanel()
+                refreshNotification()
+            }
+        })
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         if (AgentEngine.running) {
             row2.addView(Button(this).apply {
                 text = "Stop all"
-                setOnClickListener { AgentEngine.stopAll(); hidePanel() }
+                setOnClickListener {
+                    AgentEngine.stopAll()
+                    hidePanel()
+                    refreshNotification()
+                }
             })
         }
-        row2.addView(close)
-        box.addView(lg); box.addView(et); box.addView(row); box.addView(row2)
+        row2.addView(Button(this).apply {
+            text = "Close"
+            setOnClickListener { hidePanel() }
+        })
+        box.addView(lg)
+        box.addView(et)
+        box.addView(row)
+        box.addView(row2)
 
         val lp = WindowManager.LayoutParams(
             dp(320), WindowManager.LayoutParams.WRAP_CONTENT,
