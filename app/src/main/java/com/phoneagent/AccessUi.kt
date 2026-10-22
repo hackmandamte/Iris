@@ -21,24 +21,32 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 
-/** Quick-access Face bubble + overlay toolbar. Stays on current screen. */
+/** Quick-access bubble (gradient mark, not Face) + overlay toolbar. Stays on current screen. */
 object Quick {
     private var host: Context? = null
     private var accessibilityHost = false
     private var bubble: View? = null
-    private var face: FaceView? = null
     private var menu: View? = null
     private val ui = Handler(Looper.getMainLooper())
     private var wm: WindowManager? = null
     private var idleAlpha = 1f
+    private const val IDLE_ALPHA = 0.16f
+
+    private val BLEND = intArrayOf(
+        0xFF6B8AFF.toInt(),
+        0xFF9B6DFF.toInt(),
+        0xFFE8A87C.toInt(),
+        0xFFD4849A.toInt()
+    )
+
     private val fadeStep = object : Runnable {
         override fun run() {
             val v = bubble ?: return
             if (menu != null) { idleAlpha = 1f; v.alpha = 1f; return }
-            if (idleAlpha > 0.28f) {
-                idleAlpha = (idleAlpha - 0.04f).coerceAtLeast(0.28f)
+            if (idleAlpha > IDLE_ALPHA) {
+                idleAlpha = (idleAlpha - 0.05f).coerceAtLeast(IDLE_ALPHA)
                 v.alpha = idleAlpha
-                ui.postDelayed(this, 80)
+                ui.postDelayed(this, 70)
             }
         }
     }
@@ -49,6 +57,9 @@ object Quick {
     }
 
     private fun dp(ctx: Context, v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
+
+    private fun blendBg(radiusPx: Float): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TL_BR, BLEND).apply { cornerRadius = radiusPx }
 
     fun enable(ctx: Context, fromAccessibility: Boolean) {
         host = ctx.applicationContext
@@ -89,22 +100,20 @@ object Quick {
         val ctx = host ?: return
         val w = wm ?: return
         if (bubble != null) return
-        val size = dp(ctx, 52)
-        val f = FaceView(ctx)
-        val holder = LinearLayout(ctx).apply {
+        val size = dp(ctx, 48)
+        val mark = TextView(ctx).apply {
+            text = "✦"
+            textSize = 18f
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                setColor(0xE6121018.toInt()); cornerRadius = size / 2f
-                setStroke(dp(ctx, 1), 0x55C9A227.toInt())
-            }
-            addView(f); alpha = 1f
+            setTextColor(Color.WHITE)
+            background = blendBg(size / 2f)
         }
         val lp = WindowManager.LayoutParams(
             size, size, type(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START; x = 0; y = dp(ctx, 140) }
-        holder.setOnTouchListener(object : View.OnTouchListener {
+        mark.setOnTouchListener(object : View.OnTouchListener {
             var sx = 0; var sy = 0; var tx = 0f; var ty = 0f; var moved = false
             override fun onTouch(view: View, e: MotionEvent): Boolean {
                 when (e.actionMasked) {
@@ -127,20 +136,20 @@ object Quick {
                 return true
             }
         })
-        try { w.addView(holder, lp); bubble = holder; face = f; wakeBubble() } catch (_: Exception) { }
+        try { w.addView(mark, lp); bubble = mark; wakeBubble() } catch (_: Exception) { }
     }
 
     private fun removeBubble() {
         val w = wm ?: return
         bubble?.let { try { w.removeView(it) } catch (_: Exception) { } }
-        bubble = null; face = null
+        bubble = null
     }
 
-    private fun chip(ctx: Context, label: String, accent: Int, action: () -> Unit): TextView =
+    private fun chip(ctx: Context, label: String, action: () -> Unit): TextView =
         TextView(ctx).apply {
             text = label; textSize = 14f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
             setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-            background = GradientDrawable().apply { setColor(accent); cornerRadius = dp(ctx, 14).toFloat() }
+            background = GradientDrawable().apply { setColor(0xFF2E2A3C.toInt()); cornerRadius = dp(ctx, 14).toFloat() }
             setOnClickListener { action() }
         }
 
@@ -151,18 +160,22 @@ object Quick {
         val box = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
-            background = GradientDrawable().apply {
-                colors = intArrayOf(0xF21A1824.toInt(), 0xF2121018.toInt())
-                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xF21C1A28.toInt(), 0xF2141220.toInt())).apply {
                 cornerRadius = dp(ctx, 22).toFloat()
-                setStroke(dp(ctx, 1), 0x44C9A227.toInt())
             }
             elevation = dp(ctx, 12).toFloat()
         }
-        box.addView(TextView(ctx).apply {
-            text = "Iris"; textSize = 13f; setTextColor(0xFFC9A227.toInt())
+        val titleRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(ctx, 4), 0, 0, dp(ctx, 10))
+        }
+        titleRow.addView(TextView(ctx).apply { text = "Iris"; textSize = 13f; setTextColor(0xFFE8E4F8.toInt()) })
+        titleRow.addView(View(ctx).apply {
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, BLEND).apply { cornerRadius = dp(ctx, 2).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(ctx, 40), dp(ctx, 3)).apply { topMargin = dp(ctx, 4) }
         })
+        box.addView(titleRow)
+
         val inputRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply { setColor(0xFF252230.toInt()); cornerRadius = dp(ctx, 16).toFloat() }
@@ -179,8 +192,8 @@ object Quick {
             setOnClickListener { listenVoice(ctx, et) }
         }
         val send = TextView(ctx).apply {
-            text = "↑"; textSize = 16f; gravity = Gravity.CENTER; setTextColor(0xFF1A1508.toInt())
-            background = GradientDrawable().apply { setColor(0xFFE0C35A.toInt()); cornerRadius = dp(ctx, 14).toFloat() }
+            text = "↑"; textSize = 16f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
+            background = blendBg(dp(ctx, 14).toFloat())
             setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
             setOnClickListener {
                 val t = et.text.toString().trim()
@@ -209,8 +222,8 @@ object Quick {
         }
         val speakOn = ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).getBoolean("speak", true)
         row(
-            chip(ctx, "Summarize", 0xFF3A3560.toInt()) { hideMenu(); AgentEngine.summarizeScreen() },
-            chip(ctx, if (speakOn) "Mute" else "Unmute", 0xFF3A3560.toInt()) {
+            chip(ctx, "Summarize") { hideMenu(); AgentEngine.summarizeScreen() },
+            chip(ctx, if (speakOn) "Mute" else "Unmute") {
                 val p = ctx.getSharedPreferences("agent", Context.MODE_PRIVATE)
                 val next = !p.getBoolean("speak", true)
                 p.edit().putBoolean("speak", next).apply()
@@ -220,10 +233,9 @@ object Quick {
             }
         )
         if (AgentEngine.running) {
-            row(chip(ctx, "Stop", 0xFF5C2A2A.toInt()) { AgentEngine.stopAll(); hideMenu() },
-                chip(ctx, "Close", 0xFF2A2838.toInt()) { hideMenu() })
+            row(chip(ctx, "Stop") { AgentEngine.stopAll(); hideMenu() }, chip(ctx, "Close") { hideMenu() })
         } else {
-            row(chip(ctx, "Close", 0xFF2A2838.toInt()) { hideMenu() })
+            row(chip(ctx, "Close") { hideMenu() })
         }
         box.addView(TextView(ctx).apply {
             text = "Open Iris app"; textSize = 12f; setTextColor(0x88FFFFFF.toInt()); gravity = Gravity.CENTER
