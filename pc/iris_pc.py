@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""
-Iris for PC — companion server for the Iris Android app.
-
-Implements the phone pairing protocol (AES-GCM) and a simple agent loop
-so the phone can send tasks, poll progress, hand off work, and receive inbox items.
-
-Usage:
-  pip install -r requirements.txt
-  python iris_pc.py
-
-Then pair from the phone: Settings → PC → Pair PC (paste the link printed here).
-Same Wi‑Fi required.
-"""
+"""Iris for PC — companion server. Keys arrive from the phone on pair."""
 
 from __future__ import annotations
 
@@ -34,7 +22,7 @@ from typing import Any
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 except ImportError:
-    print("Install dependencies: pip install -r requirements.txt", file=sys.stderr)
+    print("Install: pip install cryptography", file=sys.stderr)
     sys.exit(1)
 
 AAD_PAIR = b"iris-pair"
@@ -145,18 +133,28 @@ class IrisPC:
 
         device_id = f"phone-{secrets.token_hex(4)}"
         with self._lock:
-            self.state["devices"][device_id] = {
-                "name": phone_name,
-                "key_b64": key_b64,
-            }
+            self.state["devices"][device_id] = {"name": phone_name, "key_b64": key_b64}
             self.state["pair_token"] = secrets.token_urlsafe(24)
             self.save_state()
+
+        settings = plain.get("settings") or {}
+        if isinstance(settings, dict) and settings:
+            for k in ("api_key", "model", "provider", "openai_key", "openai_base", "openai_model"):
+                v = settings.get(k)
+                if isinstance(v, str) and v.strip():
+                    self.config[k] = v.strip()
+            self.save_config()
+            print("[pair] received API settings from phone")
 
         resp: dict[str, Any] = {"device": device_id}
         if plain.get("importSettings"):
             resp["settings"] = {
                 "api_key": self.config.get("api_key", ""),
                 "model": self.config.get("model", "gemini-2.0-flash"),
+                "provider": self.config.get("provider", "gemini"),
+                "openai_key": self.config.get("openai_key", ""),
+                "openai_base": self.config.get("openai_base", ""),
+                "openai_model": self.config.get("openai_model", ""),
             }
         print(f"[pair] {phone_name} paired as {device_id}")
         return seal(pair_key, resp, AAD_PAIR)
@@ -179,7 +177,6 @@ class IrisPC:
                 return {"error": "no paired devices"}
             key = b64d(keys[0]["key_b64"])
             return seal(key, {"error": "auth failed"}, AAD_API)
-
         plain = unseal(key, env, AAD_API)
         op = plain.get("op", "")
         try:
@@ -215,12 +212,8 @@ class IrisPC:
                 tid = int(self.state["next_task"])
                 self.state["next_task"] = tid + 1
                 self.state["tasks"][str(tid)] = {
-                    "id": tid,
-                    "title": text[:40],
-                    "lines": [f"You: {text}"],
-                    "approvals": [],
-                    "done": False,
-                    "cancelled": False,
+                    "id": tid, "title": text[:40], "lines": [f"You: {text}"],
+                    "approvals": [], "done": False, "cancelled": False,
                 }
             self.save_state()
         th = threading.Thread(target=self._run_task, args=(tid, text), daemon=True)
@@ -267,13 +260,8 @@ class IrisPC:
     def op_handoff(self, plain: dict) -> dict:
         title = plain.get("title") or "Handoff"
         entries = plain.get("entries") or []
-        item = {
-            "id": secrets.token_hex(8),
-            "kind": "handoff",
-            "title": title,
-            "entries": entries[-40:],
-            "at": int(time.time()),
-        }
+        item = {"id": secrets.token_hex(8), "kind": "handoff", "title": title,
+                "entries": entries[-40:], "at": int(time.time())}
         with self._lock:
             self.state["inbox"].append(item)
             self.save_state()
@@ -329,10 +317,7 @@ class IrisPC:
         if not self.config.get("api_key"):
             if self.config.get("openai_key"):
                 return self._openai_chat(user_text)
-            return (
-                "No API key on PC. Edit ~/.iris-pc/config.json and set api_key (Gemini) "
-                "or openai_key + openai_base + openai_model (OpenRouter/Groq/etc)."
-            )
+            return "No API key yet. Pair from the phone so keys sync automatically."
         return self._gemini_chat(user_text)
 
     def _gemini_chat(self, user_text: str) -> str:
@@ -341,9 +326,7 @@ class IrisPC:
         models = [model, "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
         body = json.dumps({
             "contents": [{"role": "user", "parts": [{"text": user_text}]}],
-            "systemInstruction": {
-                "parts": [{"text": "You are Iris on the user's PC. Be concise and helpful."}]
-            },
+            "systemInstruction": {"parts": [{"text": "You are Iris on the user's PC. Be concise and helpful."}]},
         }).encode("utf-8")
         last = "unknown error"
         for m in models:
@@ -355,8 +338,6 @@ class IrisPC:
                 parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
                 text = "".join(p.get("text", "") for p in parts).strip()
                 if text:
-                    if m != model:
-                        print(f"[llm] switched to {m}")
                     return text
                 last = "empty response"
             except urllib.error.HTTPError as e:
@@ -381,10 +362,8 @@ class IrisPC:
             ],
         }).encode("utf-8")
         req = urllib.request.Request(
-            f"{base}/chat/completions",
-            data=body,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-            method="POST",
+            f"{base}/chat/completions", data=body,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, method="POST",
         )
         with urllib.request.urlopen(req, timeout=90) as r:
             data = json.loads(r.read().decode("utf-8"))
@@ -419,8 +398,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/pair":
             self._write_json(200, app.handle_pair(body))
         elif self.path == "/api":
-            out = app.handle_api(body)
-            self._write_json(200, out)
+            self._write_json(200, app.handle_api(body))
         else:
             self._write_json(404, {"error": "not found"})
 
@@ -440,35 +418,16 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     app = IrisPC()
     port = int(app.config.get("port") or DEFAULT_PORT)
-    if os.environ.get("IRIS_API_KEY"):
-        app.config["api_key"] = os.environ["IRIS_API_KEY"]
-    if os.environ.get("IRIS_OPENAI_KEY"):
-        app.config["openai_key"] = os.environ["IRIS_OPENAI_KEY"]
-    if os.environ.get("IRIS_OPENAI_BASE"):
-        app.config["openai_base"] = os.environ["IRIS_OPENAI_BASE"]
-    if os.environ.get("IRIS_OPENAI_MODEL"):
-        app.config["openai_model"] = os.environ["IRIS_OPENAI_MODEL"]
     app.save_config()
-
     httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     httpd.app = app  # type: ignore[attr-defined]
-
     link = app.pair_link()
     print("=" * 60)
     print("  Iris for PC")
+    print(f"  Listen: {local_ip()}:{port}")
+    print(f"  Pair:   {link}")
+    print("  API keys arrive automatically when the phone pairs.")
     print("=" * 60)
-    print(f"  Name:   {app.config.get('name')}")
-    print(f"  Listen: 0.0.0.0:{port}  (LAN {local_ip()}:{port})")
-    print(f"  Config: {CONFIG_FILE}")
-    print()
-    print("  Pair link (paste in Iris → Settings → PC → Pair PC):")
-    print(f"  {link}")
-    print()
-    print("  Set Gemini key:  edit config api_key")
-    print("  Or OpenRouter:   openai_key + openai_base=https://openrouter.ai/api/v1 + openai_model")
-    print("  Ctrl+C to stop.")
-    print("=" * 60)
-
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
