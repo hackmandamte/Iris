@@ -28,6 +28,7 @@ object Pc {
     class Link(val host: String, val port: Int, val token: String, val pcName: String)
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences("agent_pc", Context.MODE_PRIVATE)
+    private fun agentSp(ctx: Context) = ctx.getSharedPreferences("agent", Context.MODE_PRIVATE)
     private fun b64(b: ByteArray): String = Base64.encodeToString(b, Base64.NO_WRAP)
     private fun unb64(s: String): ByteArray = Base64.decode(s, Base64.DEFAULT)
     private fun sha256(s: String): ByteArray = MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
@@ -94,14 +95,27 @@ object Pc {
         return Link(h, p, t, n)
     }
 
-    fun pair(ctx: Context, link: Link, phoneName: String, importSettings: Boolean): String? {
+    private fun exportSettings(ctx: Context): JSONObject {
+        val p = agentSp(ctx)
+        return JSONObject()
+            .put("api_key", p.getString("api_key", "") ?: "")
+            .put("model", p.getString("model", "") ?: "")
+            .put("provider", p.getString("provider", "auto") ?: "auto")
+            .put("openai_key", p.getString("openai_key", "") ?: "")
+            .put("openai_base", p.getString("openai_base", "") ?: "")
+            .put("openai_model", p.getString("openai_model", "") ?: "")
+    }
+
+    /** Pair with PC. Always sends phone API keys to the PC. */
+    fun pair(ctx: Context, link: Link, phoneName: String, importSettings: Boolean = true): String? {
         return try {
             val phoneKey = ByteArray(32).also { rnd.nextBytes(it) }
             val pairKey = sha256(link.token)
             val req = seal(pairKey, JSONObject()
                 .put("name", phoneName)
                 .put("key", b64(phoneKey))
-                .put("importSettings", importSettings), AAD_PAIR)
+                .put("importSettings", importSettings)
+                .put("settings", exportSettings(ctx)), AAD_PAIR)
             val (code, resp) = http(link.host, link.port, "/pair", req)
             if (code !in 200..299) return "HTTP $code"
             val plain = unseal(pairKey, resp, AAD_PAIR)
@@ -112,10 +126,20 @@ object Pc {
             save(ctx, list)
             if (importSettings) {
                 plain.optJSONObject("settings")?.let { s ->
-                    ctx.getSharedPreferences("agent", Context.MODE_PRIVATE).edit()
-                        .putString("api_key", s.optString("api_key"))
-                        .putString("model", s.optString("model", "gemini-2.5-flash"))
-                        .apply()
+                    val ed = agentSp(ctx).edit()
+                    val cur = agentSp(ctx)
+                    fun fill(key: String, value: String) {
+                        if (value.isNotBlank() && cur.getString(key, "").isNullOrBlank()) {
+                            ed.putString(key, value)
+                        }
+                    }
+                    fill("api_key", s.optString("api_key"))
+                    fill("model", s.optString("model"))
+                    fill("provider", s.optString("provider"))
+                    fill("openai_key", s.optString("openai_key"))
+                    fill("openai_base", s.optString("openai_base"))
+                    fill("openai_model", s.optString("openai_model"))
+                    ed.apply()
                 }
             }
             null
