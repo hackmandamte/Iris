@@ -6,7 +6,7 @@ import java.net.URL
 
 /**
  * Discover optional on-device / local LLM endpoints for fallback when cloud APIs fail.
- * Does not bypass Android security — only probes common local HTTP APIs and known packages.
+ * Probe requires a JSON response (not HTML) so random local web servers are ignored.
  */
 object LocalModels {
     data class Endpoint(val name: String, val baseUrl: String, val model: String)
@@ -39,10 +39,9 @@ object LocalModels {
         if (custom.isNotEmpty()) {
             out.add(Endpoint("Custom local", custom.trimEnd('/'), customModel))
         }
+        // Only probe Ollama default — 8080/1234 often serve HTML and caused false positives
         val probes = listOf(
-            "http://127.0.0.1:11434/v1" to "llama3.2",
-            "http://127.0.0.1:8080/v1" to "local",
-            "http://127.0.0.1:1234/v1" to "local"
+            "http://127.0.0.1:11434/v1" to "llama3.2"
         )
         for ((base, model) in probes) {
             if (out.none { it.baseUrl == base }) out.add(Endpoint("Probe $base", base, model))
@@ -63,8 +62,15 @@ object LocalModels {
             c.connectTimeout = timeoutMs
             c.readTimeout = timeoutMs
             c.requestMethod = "GET"
+            c.setRequestProperty("Accept", "application/json")
             val code = c.responseCode
-            code in 200..499
+            if (code !in 200..299 && code != 401) return false
+            val stream = if (code in 200..299) c.inputStream else c.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }?.trim().orEmpty()
+            if (body.isEmpty()) return code == 401
+            val head = body.take(32).lowercase()
+            if (head.startsWith("<!doctype") || head.startsWith("<html") || head.startsWith("<")) return false
+            body.startsWith("{") || body.startsWith("[")
         } catch (_: Exception) {
             false
         }
